@@ -15,9 +15,15 @@ from datetime import datetime
 try:
     import rawpy
     import numpy as np
+    from scipy import ndimage
+    from PIL import Image
+    import cv2
     HAS_RAWPY = True
-except ImportError:
+    HAS_CV2 = True
+except ImportError as e:
     HAS_RAWPY = False
+    HAS_CV2 = False
+    print(f"Import warning: {e}")
 
 # XMP preset template (loaded from your preset)
 XMP_PRESET = """<x:xmpmeta xmlns:x="adobe:ns:meta/" x:xmptk="Adobe XMP Core 7.0-c000 1.000000, 0000/00/00-00:00:00        ">
@@ -239,6 +245,24 @@ XMP_PRESET = """<x:xmpmeta xmlns:x="adobe:ns:meta/" x:xmptk="Adobe XMP Core 7.0-
 </x:xmpmeta>"""
 
 
+def generate_xmp_with_rotation(tilt_angle=0.0):
+    """Generate XMP preset with rotation and auto-crop if tilt angle is detected"""
+    # Parse the base XMP and add rotation parameters
+    xmp = XMP_PRESET
+
+    if abs(tilt_angle) > 0.1:  # Only add rotation if tilt is significant (> 0.1 degrees)
+        # Add rotation parameters before the closing tags
+        rotation_params = f"""   crs:StraightenAngle="{tilt_angle:.2f}"
+   crs:CropConstrainToWarp="1"
+   crs:HasCrop="True"
+"""
+        # Insert before the last crs attributes
+        xmp = xmp.replace('   crs:AsShotTint="4">',
+                         f'   crs:AsShotTint="4"\n{rotation_params}>')
+
+    return xmp
+
+
 def calculate_sharpness(image_array):
     """Calculate sharpness using Laplacian variance method"""
     try:
@@ -247,14 +271,14 @@ def calculate_sharpness(image_array):
             gray = np.mean(image_array, axis=2)
         else:
             gray = image_array
-        
+
         # Apply Laplacian operator
         laplacian = np.array([[0, 1, 0], [1, -4, 1], [0, 1, 0]])
-        
+
         # Convolve
         from scipy import signal
         filtered = signal.convolve2d(gray, laplacian, mode='valid')
-        
+
         # Return variance as sharpness metric
         return float(np.var(filtered))
     except Exception as e:
@@ -262,9 +286,56 @@ def calculate_sharpness(image_array):
         return 0
 
 
-def analyze_photo(file_path, sharpness_threshold=100):
-    """Analyze a photo for sharpness and orientation"""
+def detect_horizon_angle(image_array):
+    """Detect the tilt angle of the horizon/image using edge detection"""
     try:
+        if not HAS_CV2:
+            return 0.0
+
+        # Convert to grayscale if needed
+        if len(image_array.shape) == 3:
+            gray = cv2.cvtColor(image_array.astype(np.uint8), cv2.COLOR_RGB2GRAY)
+        else:
+            gray = image_array.astype(np.uint8)
+
+        # Apply Canny edge detection
+        edges = cv2.Canny(gray, 50, 150, apertureSize=3)
+
+        # Detect lines using Hough Transform
+        lines = cv2.HoughLines(edges, 1, np.pi / 180, 100)
+
+        if lines is None or len(lines) == 0:
+            return 0.0
+
+        # Calculate angles of detected lines
+        angles = []
+        for rho, theta in lines[:, 0]:
+            # Convert from Hough space to degrees
+            angle = (theta * 180 / np.pi) - 90
+            # Normalize to -45 to +45 degrees range
+            if angle > 45:
+                angle -= 90
+            elif angle < -45:
+                angle += 90
+            # Only consider small tilts (less than 10 degrees)
+            if abs(angle) < 10:
+                angles.append(angle)
+
+        if not angles:
+            return 0.0
+
+        # Return median angle (more robust than mean)
+        return float(np.median(angles))
+
+    except Exception as e:
+        print(f"Horizon detection error: {e}")
+        return 0.0
+
+
+def analyze_photo(file_path, sharpness_threshold=100, detect_tilt=False):
+    """Analyze a photo for sharpness, orientation, and tilt angle"""
+    try:
+        tilt_angle = 0.0
         if not HAS_RAWPY:
             # Fallback: just check file size as proxy
             file_size = os.path.getsize(file_path) / (1024 * 1024)  # MB
@@ -278,26 +349,32 @@ def analyze_photo(file_path, sharpness_threshold=100):
                 thumb = raw.extract_thumb()
                 if thumb.format == rawpy.ThumbFormat.JPEG:
                     import io
-                    from PIL import Image
                     img = Image.open(io.BytesIO(thumb.data))
                     width, height = img.size
                     img_array = np.array(img.convert('L'))  # Convert to grayscale
+                    img_array_color = np.array(img)  # Keep color for tilt detection
                 else:
                     # Use postprocess for raw data
-                    img_array = raw.postprocess(use_camera_wb=True, half_size=True)
-                    height, width = img_array.shape[:2]
-                
+                    img_array_color = raw.postprocess(use_camera_wb=True, half_size=True)
+                    height, width = img_array_color.shape[:2]
+                    img_array = np.mean(img_array_color, axis=2).astype(np.uint8)
+
                 # Calculate sharpness
                 sharpness_score = calculate_sharpness(img_array)
                 is_sharp = sharpness_score > sharpness_threshold
                 is_horizontal = width > height
-        
+
+                # Detect tilt angle if requested
+                if detect_tilt and HAS_CV2:
+                    tilt_angle = detect_horizon_angle(img_array_color)
+
         return {
             'sharpness': sharpness_score,
             'is_sharp': is_sharp,
             'is_horizontal': is_horizontal,
             'width': width,
             'height': height,
+            'tilt_angle': tilt_angle,
             'selected': is_sharp and is_horizontal
         }
     except Exception as e:
@@ -308,6 +385,7 @@ def analyze_photo(file_path, sharpness_threshold=100):
             'is_horizontal': True,
             'width': 0,
             'height': 0,
+            'tilt_angle': 0.0,
             'selected': False,
             'error': str(e)
         }
@@ -323,8 +401,9 @@ class PhotoSelectorApp:
         self.output_folder = tk.StringVar()
         self.project_name = tk.StringVar(value="Project")
         self.sharpness_threshold = tk.IntVar(value=100)
+        self.auto_straighten = tk.BooleanVar(value=True)
         self.photos = []
-        
+
         self.create_widgets()
     
     def create_widgets(self):
@@ -348,33 +427,37 @@ class PhotoSelectorApp:
         
         # Sharpness threshold
         ttk.Label(main_frame, text="Sharpness Threshold:").grid(row=3, column=0, sticky=tk.W, pady=5)
-        ttk.Scale(main_frame, from_=50, to=500, variable=self.sharpness_threshold, 
+        ttk.Scale(main_frame, from_=50, to=500, variable=self.sharpness_threshold,
                   orient=tk.HORIZONTAL, length=300).grid(row=3, column=1, sticky=tk.W, pady=5, padx=5)
         ttk.Label(main_frame, textvariable=self.sharpness_threshold).grid(row=3, column=2, pady=5)
-        
+
+        # Auto-straighten checkbox
+        ttk.Checkbutton(main_frame, text="Auto-straighten tilted photos (detect and fix horizon tilt)",
+                       variable=self.auto_straighten).grid(row=4, column=1, sticky=tk.W, pady=5, padx=5)
+
         # Analyze button
-        ttk.Button(main_frame, text="Analyze Photos", command=self.analyze_photos, 
-                   style='Accent.TButton').grid(row=4, column=1, pady=15)
+        ttk.Button(main_frame, text="Analyze Photos", command=self.analyze_photos,
+                   style='Accent.TButton').grid(row=5, column=1, pady=15)
         
         # Progress bar
         self.progress = ttk.Progressbar(main_frame, length=400, mode='indeterminate')
-        self.progress.grid(row=5, column=0, columnspan=3, pady=10)
-        
+        self.progress.grid(row=6, column=0, columnspan=3, pady=10)
+
         # Results text area
-        ttk.Label(main_frame, text="Results:").grid(row=6, column=0, sticky=tk.W, pady=5)
+        ttk.Label(main_frame, text="Results:").grid(row=7, column=0, sticky=tk.W, pady=5)
         self.results_text = scrolledtext.ScrolledText(main_frame, width=100, height=20)
-        self.results_text.grid(row=7, column=0, columnspan=3, pady=5)
-        
+        self.results_text.grid(row=8, column=0, columnspan=3, pady=5)
+
         # Process button
-        self.process_btn = ttk.Button(main_frame, text="Process Selected Photos", 
+        self.process_btn = ttk.Button(main_frame, text="Process Selected Photos",
                                        command=self.process_photos, state='disabled')
-        self.process_btn.grid(row=8, column=1, pady=15)
-        
+        self.process_btn.grid(row=9, column=1, pady=15)
+
         # Configure grid weights
         self.root.columnconfigure(0, weight=1)
         self.root.rowconfigure(0, weight=1)
         main_frame.columnconfigure(1, weight=1)
-        main_frame.rowconfigure(7, weight=1)
+        main_frame.rowconfigure(8, weight=1)
     
     def select_input_folder(self):
         folder = filedialog.askdirectory(title="Select Input Folder with ARW Photos")
@@ -422,26 +505,31 @@ class PhotoSelectorApp:
     
     def _analyze_thread(self, arw_files):
         threshold = self.sharpness_threshold.get()
-        
+        detect_tilt = self.auto_straighten.get()
+
         for i, file_path in enumerate(arw_files):
-            result = analyze_photo(str(file_path), threshold)
+            result = analyze_photo(str(file_path), threshold, detect_tilt)
             result['path'] = str(file_path)
             result['filename'] = file_path.name
             self.photos.append(result)
-            
+
             status = "✓ SELECTED" if result['selected'] else "✗ REJECTED"
             reason = []
             if not result['is_sharp']:
                 reason.append("not sharp enough")
             if not result['is_horizontal']:
                 reason.append("vertical orientation")
-            
+
             reason_str = f" ({', '.join(reason)})" if reason else ""
-            
-            self.root.after(0, self.log_message, 
+
+            tilt_info = ""
+            if detect_tilt and abs(result.get('tilt_angle', 0)) > 0.1:
+                tilt_info = f" [Tilt: {result['tilt_angle']:.2f}°]"
+
+            self.root.after(0, self.log_message,
                           f"{file_path.name}: {status} "
                           f"[Sharpness: {result['sharpness']:.1f}, "
-                          f"{result['width']}x{result['height']}]{reason_str}")
+                          f"{result['width']}x{result['height']}]{reason_str}{tilt_info}")
         
         selected_count = sum(1 for p in self.photos if p['selected'])
         self.root.after(0, self.log_message, 
@@ -479,25 +567,30 @@ class PhotoSelectorApp:
     
     def _process_thread(self, output_dir, project):
         selected_photos = [p for p in self.photos if p['selected']]
-        
+
         for i, photo in enumerate(selected_photos, 1):
             try:
                 # Create new filename
                 new_name = f"{project}_{i:04d}.ARW"
                 new_path = os.path.join(output_dir, new_name)
-                
+
                 # Copy the photo
                 shutil.copy2(photo['path'], new_path)
-                
+
+                # Generate XMP with rotation if tilt was detected
+                tilt_angle = photo.get('tilt_angle', 0.0)
+                xmp_content = generate_xmp_with_rotation(-tilt_angle)  # Negative to correct the tilt
+
                 # Create XMP sidecar file
                 xmp_path = os.path.join(output_dir, f"{project}_{i:04d}.xmp")
                 with open(xmp_path, 'w', encoding='utf-8') as f:
-                    f.write(XMP_PRESET)
-                
-                self.root.after(0, self.log_message, 
-                              f"Processed: {photo['filename']} → {new_name}")
+                    f.write(xmp_content)
+
+                tilt_msg = f" (straightened {abs(tilt_angle):.2f}°)" if abs(tilt_angle) > 0.1 else ""
+                self.root.after(0, self.log_message,
+                              f"Processed: {photo['filename']} → {new_name}{tilt_msg}")
             except Exception as e:
-                self.root.after(0, self.log_message, 
+                self.root.after(0, self.log_message,
                               f"Error processing {photo['filename']}: {e}")
         
         self.root.after(0, self.log_message, 

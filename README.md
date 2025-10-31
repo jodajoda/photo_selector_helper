@@ -9,6 +9,12 @@ A desktop application for photographers to automatically select sharp, horizonta
 - Filters for horizontal orientation
 - Adjustable sharpness threshold
 
+✅ **Auto-Straightening (NEW!)**
+- Automatically detects tilted horizons using edge detection
+- Corrects rotation angle up to ±10 degrees
+- Auto-crops image to remove black edges after rotation
+- Applied via XMP preset for non-destructive editing
+
 ✅ **Batch Renaming**
 - Rename all selected photos with custom project name
 - Sequential numbering (e.g., Wedding_0001.ARW, Wedding_0002.ARW)
@@ -59,6 +65,7 @@ pip3 install -r requirements.txt
 - `numpy` - For image processing
 - `scipy` - For sharpness calculations
 - `Pillow` - For image manipulation
+- `opencv-python` - For horizon detection and tilt correction
 
 ## Usage
 
@@ -98,12 +105,18 @@ pip3 install -r requirements.txt
    - Higher = fewer photos selected (more strict)
    - Experiment to find what works for your camera/lens
 
-5. **Analyze Photos**
+5. **Enable Auto-Straightening** (optional)
+   - Check the box to automatically detect and correct tilted horizons
+   - The app will analyze each photo for tilt (typically ±10 degrees or less)
+   - Rotation is applied via XMP preset (non-destructive)
+   - Images are auto-cropped to remove black edges
+
+6. **Analyze Photos**
    - Click "Analyze Photos" button
    - Wait for analysis to complete
    - Review the results in the log
 
-6. **Process Selected Photos**
+7. **Process Selected Photos**
    - Click "Process Selected Photos"
    - The app will:
      - Copy selected photos to output folder
@@ -143,6 +156,15 @@ The app uses **Laplacian variance** to measure image sharpness:
 - Reads image dimensions from RAW metadata
 - Width > Height = Horizontal ✓
 - Width < Height = Vertical ✗
+
+### Auto-Straightening (Horizon Correction)
+The app uses **Hough Line Transform** to detect and correct tilted horizons:
+- Applies Canny edge detection to find prominent lines
+- Uses Hough transform to detect line angles
+- Calculates median tilt angle (robust against outliers)
+- Only corrects small tilts (±10 degrees)
+- Adds rotation and auto-crop parameters to XMP preset
+- Non-destructive - original RAW file is unchanged
 
 ### XMP Preset
 Your "Emiék" preset includes:
