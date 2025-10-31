@@ -25,6 +25,18 @@ A desktop application for photographers to automatically select sharp, horizonta
 ## Installation
 
 ### Step 1: Install Python
+
+**macOS Users:**
+The system Python doesn't support Tkinter properly. Install Python via Homebrew:
+```bash
+# Install Homebrew if you don't have it
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+
+# Install Python with Tkinter support
+brew install python-tk@3.11
+```
+
+**Other Systems:**
 Make sure you have Python 3.8 or newer installed. Check with:
 ```bash
 python3 --version
@@ -34,6 +46,11 @@ python3 --version
 Open Terminal and navigate to the folder with the files:
 ```bash
 cd ~/Downloads
+
+# macOS (using Homebrew Python):
+/opt/homebrew/bin/python3.11 -m pip install -r requirements.txt
+
+# Other systems:
 pip3 install -r requirements.txt
 ```
 
@@ -54,6 +71,10 @@ pip3 install -r requirements.txt
    ```
 3. Run the app:
    ```bash
+   # macOS (using Homebrew Python):
+   /opt/homebrew/bin/python3.11 photo_selector.py
+
+   # Other systems:
    python3 photo_selector.py
    ```
 
