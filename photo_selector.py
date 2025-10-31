@@ -332,7 +332,7 @@ def detect_horizon_angle(image_array):
         return 0.0
 
 
-def analyze_photo(file_path, sharpness_threshold=100, detect_tilt=False):
+def analyze_photo(file_path, sharpness_threshold=100, detect_tilt=False, include_vertical=True):
     """Analyze a photo for sharpness, orientation, and tilt angle"""
     try:
         tilt_angle = 0.0
@@ -368,6 +368,14 @@ def analyze_photo(file_path, sharpness_threshold=100, detect_tilt=False):
                 if detect_tilt and HAS_CV2:
                     tilt_angle = detect_horizon_angle(img_array_color)
 
+        # Determine if photo should be selected based on filters
+        if include_vertical:
+            # Select if sharp, regardless of orientation
+            selected = is_sharp
+        else:
+            # Select only if sharp AND horizontal
+            selected = is_sharp and is_horizontal
+
         return {
             'sharpness': sharpness_score,
             'is_sharp': is_sharp,
@@ -375,7 +383,7 @@ def analyze_photo(file_path, sharpness_threshold=100, detect_tilt=False):
             'width': width,
             'height': height,
             'tilt_angle': tilt_angle,
-            'selected': is_sharp and is_horizontal
+            'selected': selected
         }
     except Exception as e:
         print(f"Error analyzing {file_path}: {e}")
@@ -402,6 +410,7 @@ class PhotoSelectorApp:
         self.project_name = tk.StringVar(value="Project")
         self.sharpness_threshold = tk.IntVar(value=100)
         self.auto_straighten = tk.BooleanVar(value=True)
+        self.include_vertical = tk.BooleanVar(value=True)
         self.photos = []
 
         self.create_widgets()
@@ -435,29 +444,33 @@ class PhotoSelectorApp:
         ttk.Checkbutton(main_frame, text="Auto-straighten tilted photos (detect and fix horizon tilt)",
                        variable=self.auto_straighten).grid(row=4, column=1, sticky=tk.W, pady=5, padx=5)
 
+        # Include vertical photos checkbox
+        ttk.Checkbutton(main_frame, text="Include vertical/portrait photos (not just horizontal)",
+                       variable=self.include_vertical).grid(row=5, column=1, sticky=tk.W, pady=5, padx=5)
+
         # Analyze button
         ttk.Button(main_frame, text="Analyze Photos", command=self.analyze_photos,
-                   style='Accent.TButton').grid(row=5, column=1, pady=15)
+                   style='Accent.TButton').grid(row=6, column=1, pady=15)
         
         # Progress bar
         self.progress = ttk.Progressbar(main_frame, length=400, mode='indeterminate')
-        self.progress.grid(row=6, column=0, columnspan=3, pady=10)
+        self.progress.grid(row=7, column=0, columnspan=3, pady=10)
 
         # Results text area
-        ttk.Label(main_frame, text="Results:").grid(row=7, column=0, sticky=tk.W, pady=5)
+        ttk.Label(main_frame, text="Results:").grid(row=8, column=0, sticky=tk.W, pady=5)
         self.results_text = scrolledtext.ScrolledText(main_frame, width=100, height=20)
-        self.results_text.grid(row=8, column=0, columnspan=3, pady=5)
+        self.results_text.grid(row=9, column=0, columnspan=3, pady=5)
 
         # Process button
         self.process_btn = ttk.Button(main_frame, text="Process Selected Photos",
                                        command=self.process_photos, state='disabled')
-        self.process_btn.grid(row=9, column=1, pady=15)
+        self.process_btn.grid(row=10, column=1, pady=15)
 
         # Configure grid weights
         self.root.columnconfigure(0, weight=1)
         self.root.rowconfigure(0, weight=1)
         main_frame.columnconfigure(1, weight=1)
-        main_frame.rowconfigure(8, weight=1)
+        main_frame.rowconfigure(9, weight=1)
     
     def select_input_folder(self):
         folder = filedialog.askdirectory(title="Select Input Folder with ARW Photos")
@@ -506,9 +519,10 @@ class PhotoSelectorApp:
     def _analyze_thread(self, arw_files):
         threshold = self.sharpness_threshold.get()
         detect_tilt = self.auto_straighten.get()
+        include_vertical = self.include_vertical.get()
 
         for i, file_path in enumerate(arw_files):
-            result = analyze_photo(str(file_path), threshold, detect_tilt)
+            result = analyze_photo(str(file_path), threshold, detect_tilt, include_vertical)
             result['path'] = str(file_path)
             result['filename'] = file_path.name
             self.photos.append(result)
@@ -517,7 +531,7 @@ class PhotoSelectorApp:
             reason = []
             if not result['is_sharp']:
                 reason.append("not sharp enough")
-            if not result['is_horizontal']:
+            if not include_vertical and not result['is_horizontal']:
                 reason.append("vertical orientation")
 
             reason_str = f" ({', '.join(reason)})" if reason else ""

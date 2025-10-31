@@ -6,8 +6,9 @@ A desktop application for photographers to automatically select sharp, horizonta
 
 ✅ **Automatic Selection**
 - Detects sharp photos using advanced sharpness analysis
-- Filters for horizontal orientation
+- Optional filter for horizontal/vertical orientation
 - Adjustable sharpness threshold
+- Choose to include or exclude portrait photos
 
 ✅ **Auto-Straightening (NEW!)**
 - Automatically detects tilted horizons using edge detection
@@ -111,12 +112,17 @@ pip3 install -r requirements.txt
    - Rotation is applied via XMP preset (non-destructive)
    - Images are auto-cropped to remove black edges
 
-6. **Analyze Photos**
+6. **Include Vertical/Portrait Photos** (optional)
+   - **Checked (default):** Selects all sharp photos, both horizontal and vertical
+   - **Unchecked:** Only selects sharp horizontal (landscape) photos
+   - Useful if you only want landscape orientation for your project
+
+7. **Analyze Photos**
    - Click "Analyze Photos" button
    - Wait for analysis to complete
    - Review the results in the log
 
-7. **Process Selected Photos**
+8. **Process Selected Photos**
    - Click "Process Selected Photos"
    - The app will:
      - Copy selected photos to output folder
@@ -154,8 +160,9 @@ The app uses **Laplacian variance** to measure image sharpness:
 
 ### Orientation Detection
 - Reads image dimensions from RAW metadata
-- Width > Height = Horizontal ✓
-- Width < Height = Vertical ✗
+- Width > Height = Horizontal (landscape)
+- Width < Height = Vertical (portrait)
+- Optional filtering: Include both or horizontal only
 
 ### Auto-Straightening (Horizon Correction)
 The app uses **Hough Line Transform** to detect and correct tilted horizons:
