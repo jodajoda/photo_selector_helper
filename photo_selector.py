@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Photo Selector - Automatic photo selection and renaming tool
-For ARW raw photos - selects sharp, horizontal images and applies XMP presets
+Photo Selector - Automatic photo selection and conversion tool
+For ARW raw photos - selects sharp images with focused faces and converts to JPEG
 """
 
 import os
@@ -263,8 +263,14 @@ def generate_xmp_with_rotation(tilt_angle=0.0):
     return xmp
 
 
-def calculate_sharpness(image_array):
-    """Calculate sharpness using Laplacian variance method"""
+def calculate_sharpness(image_array, face_regions=None):
+    """Calculate sharpness using enhanced Laplacian variance method
+
+    Args:
+        image_array: The image to analyze
+        face_regions: Optional list of face bounding boxes [(x, y, w, h), ...]
+                     If provided, only analyzes sharpness on faces
+    """
     try:
         # Convert to grayscale if needed
         if len(image_array.shape) == 3:
@@ -272,18 +278,127 @@ def calculate_sharpness(image_array):
         else:
             gray = image_array
 
-        # Apply Laplacian operator
-        laplacian = np.array([[0, 1, 0], [1, -4, 1], [0, 1, 0]])
+        # Ensure proper data type
+        gray = gray.astype(np.float64)
 
-        # Convolve
-        from scipy import signal
-        filtered = signal.convolve2d(gray, laplacian, mode='valid')
+        # If face regions provided, only analyze those areas
+        if face_regions and len(face_regions) > 0:
+            face_sharpness_scores = []
+            for (x, y, w, h) in face_regions:
+                # Extract face region - focus on center (eyes/nose area) for better sharpness detection
+                # Eyes are typically the sharpest point and most important for portraits
+                center_factor = 0.6  # Focus on center 60% of face
+                padding_x = int(w * (1 - center_factor) / 2)
+                padding_y = int(h * (1 - center_factor) / 2)
 
-        # Return variance as sharpness metric
-        return float(np.var(filtered))
+                y1 = max(0, y + padding_y)
+                y2 = min(gray.shape[0], y + h - padding_y)
+                x1 = max(0, x + padding_x)
+                x2 = min(gray.shape[1], x + w - padding_x)
+
+                face_region = gray[y1:y2, x1:x2]
+
+                if face_region.size == 0:
+                    continue
+
+                # Use OpenCV's Laplacian if available (faster and more accurate)
+                if HAS_CV2:
+                    # Convert to uint8 for OpenCV
+                    face_uint8 = face_region.astype(np.uint8)
+
+                    # Use Sobel gradient magnitude for more robust sharpness detection
+                    # This is less sensitive to lighting and orientation
+                    sobelx = cv2.Sobel(face_uint8, cv2.CV_64F, 1, 0, ksize=3)
+                    sobely = cv2.Sobel(face_uint8, cv2.CV_64F, 0, 1, ksize=3)
+                    gradient_magnitude = np.sqrt(sobelx**2 + sobely**2)
+
+                    # Calculate mean of gradient magnitude (normalized by region size)
+                    score = float(np.mean(gradient_magnitude))
+                else:
+                    # Fallback: scipy implementation
+                    laplacian = np.array([[0, 1, 0], [1, -4, 1], [0, 1, 0]])
+                    from scipy import signal
+                    filtered = signal.convolve2d(face_region, laplacian, mode='valid')
+                    score = float(np.var(filtered))
+
+                face_sharpness_scores.append(score)
+
+            # Return average sharpness across all faces
+            return np.mean(face_sharpness_scores) if face_sharpness_scores else 0
+        else:
+            # No faces detected - analyze entire image
+            if HAS_CV2:
+                gray_uint8 = gray.astype(np.uint8)
+
+                # Use Sobel gradient magnitude for more robust sharpness detection
+                sobelx = cv2.Sobel(gray_uint8, cv2.CV_64F, 1, 0, ksize=3)
+                sobely = cv2.Sobel(gray_uint8, cv2.CV_64F, 0, 1, ksize=3)
+                gradient_magnitude = np.sqrt(sobelx**2 + sobely**2)
+
+                return float(np.mean(gradient_magnitude))
+            else:
+                laplacian = np.array([[0, 1, 0], [1, -4, 1], [0, 1, 0]])
+                from scipy import signal
+                filtered = signal.convolve2d(gray, laplacian, mode='valid')
+                return float(np.var(filtered))
+
     except Exception as e:
         print(f"Sharpness calculation error: {e}")
         return 0
+
+
+def detect_faces(image_array):
+    """Detect faces in the image using OpenCV Haar Cascade
+
+    Returns:
+        List of face bounding boxes [(x, y, w, h), ...]
+    """
+    try:
+        if not HAS_CV2:
+            return []
+
+        # Convert to grayscale if needed
+        if len(image_array.shape) == 3:
+            gray = cv2.cvtColor(image_array.astype(np.uint8), cv2.COLOR_RGB2GRAY)
+        else:
+            gray = image_array.astype(np.uint8)
+
+        # Load Haar Cascade classifier for face detection
+        # Try multiple cascade files (different OpenCV versions store them differently)
+        cascade_paths = [
+            cv2.data.haarcascades + 'haarcascade_frontalface_default.xml',
+            '/usr/local/share/opencv4/haarcascades/haarcascade_frontalface_default.xml',
+            '/usr/share/opencv/haarcascades/haarcascade_frontalface_default.xml',
+        ]
+
+        face_cascade = None
+        for cascade_path in cascade_paths:
+            if os.path.exists(cascade_path):
+                face_cascade = cv2.CascadeClassifier(cascade_path)
+                break
+
+        if face_cascade is None or face_cascade.empty():
+            # Try to load from cv2.data (most reliable method)
+            try:
+                face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+            except:
+                return []
+
+        # Detect faces
+        # Parameters tuned for portrait photography with stricter settings to reduce false positives
+        faces = face_cascade.detectMultiScale(
+            gray,
+            scaleFactor=1.1,
+            minNeighbors=8,  # Increased from 5 to reduce false positives
+            minSize=(60, 60),  # Increased minimum size to avoid detecting small artifacts
+            flags=cv2.CASCADE_SCALE_IMAGE
+        )
+
+        return [(x, y, w, h) for (x, y, w, h) in faces]
+
+    except Exception as e:
+        print(f"Face detection error: {e}")
+        return []
 
 
 def detect_horizon_angle(image_array):
@@ -333,9 +448,13 @@ def detect_horizon_angle(image_array):
 
 
 def analyze_photo(file_path, sharpness_threshold=100, detect_tilt=False, include_vertical=True):
-    """Analyze a photo for sharpness, orientation, and tilt angle"""
+    """Analyze a photo for sharpness, orientation, and tilt angle
+
+    Uses face detection to focus sharpness analysis on faces when present.
+    """
     try:
         tilt_angle = 0.0
+        face_count = 0
         if not HAS_RAWPY:
             # Fallback: just check file size as proxy
             file_size = os.path.getsize(file_path) / (1024 * 1024)  # MB
@@ -345,22 +464,18 @@ def analyze_photo(file_path, sharpness_threshold=100, detect_tilt=False, include
             width, height = 6000, 4000  # Default Sony ARW dimensions
         else:
             with rawpy.imread(file_path) as raw:
-                # Get thumbnail for faster processing
-                thumb = raw.extract_thumb()
-                if thumb.format == rawpy.ThumbFormat.JPEG:
-                    import io
-                    img = Image.open(io.BytesIO(thumb.data))
-                    width, height = img.size
-                    img_array = np.array(img.convert('L'))  # Convert to grayscale
-                    img_array_color = np.array(img)  # Keep color for tilt detection
-                else:
-                    # Use postprocess for raw data
-                    img_array_color = raw.postprocess(use_camera_wb=True, half_size=True)
-                    height, width = img_array_color.shape[:2]
-                    img_array = np.mean(img_array_color, axis=2).astype(np.uint8)
+                # For face detection, use higher resolution for better accuracy
+                # Process at quarter size (half_size=True gives 1/2 dimensions = 1/4 pixels)
+                img_array_color = raw.postprocess(use_camera_wb=True, half_size=False, output_bps=8)
+                height, width = img_array_color.shape[:2]
+                img_array = np.mean(img_array_color, axis=2).astype(np.uint8)
 
-                # Calculate sharpness
-                sharpness_score = calculate_sharpness(img_array)
+                # Detect faces first
+                face_regions = detect_faces(img_array_color) if HAS_CV2 else []
+                face_count = len(face_regions)
+
+                # Calculate sharpness (focused on faces if detected)
+                sharpness_score = calculate_sharpness(img_array, face_regions)
                 is_sharp = sharpness_score > sharpness_threshold
                 is_horizontal = width > height
 
@@ -369,12 +484,15 @@ def analyze_photo(file_path, sharpness_threshold=100, detect_tilt=False, include
                     tilt_angle = detect_horizon_angle(img_array_color)
 
         # Determine if photo should be selected based on filters
+        # IMPORTANT: Only select photos with detected faces AND sharp
+        has_faces = face_count > 0
+
         if include_vertical:
-            # Select if sharp, regardless of orientation
-            selected = is_sharp
+            # Select if sharp AND has faces, regardless of orientation
+            selected = is_sharp and has_faces
         else:
-            # Select only if sharp AND horizontal
-            selected = is_sharp and is_horizontal
+            # Select only if sharp AND has faces AND horizontal
+            selected = is_sharp and has_faces and is_horizontal
 
         return {
             'sharpness': sharpness_score,
@@ -383,6 +501,7 @@ def analyze_photo(file_path, sharpness_threshold=100, detect_tilt=False, include
             'width': width,
             'height': height,
             'tilt_angle': tilt_angle,
+            'face_count': face_count,
             'selected': selected
         }
     except Exception as e:
@@ -394,6 +513,7 @@ def analyze_photo(file_path, sharpness_threshold=100, detect_tilt=False, include
             'width': 0,
             'height': 0,
             'tilt_angle': 0.0,
+            'face_count': 0,
             'selected': False,
             'error': str(e)
         }
@@ -404,11 +524,11 @@ class PhotoSelectorApp:
         self.root = root
         self.root.title("Photo Selector & Renamer")
         self.root.geometry("900x700")
-        
+
         self.input_folder = tk.StringVar()
         self.output_folder = tk.StringVar()
         self.project_name = tk.StringVar(value="Project")
-        self.sharpness_threshold = tk.IntVar(value=100)
+        self.sharpness_threshold = tk.IntVar(value=15)
         self.auto_straighten = tk.BooleanVar(value=True)
         self.include_vertical = tk.BooleanVar(value=True)
         self.photos = []
@@ -436,7 +556,7 @@ class PhotoSelectorApp:
         
         # Sharpness threshold
         ttk.Label(main_frame, text="Sharpness Threshold:").grid(row=3, column=0, sticky=tk.W, pady=5)
-        ttk.Scale(main_frame, from_=50, to=500, variable=self.sharpness_threshold,
+        ttk.Scale(main_frame, from_=1, to=100, variable=self.sharpness_threshold,
                   orient=tk.HORIZONTAL, length=300).grid(row=3, column=1, sticky=tk.W, pady=5, padx=5)
         ttk.Label(main_frame, textvariable=self.sharpness_threshold).grid(row=3, column=2, pady=5)
 
@@ -451,7 +571,7 @@ class PhotoSelectorApp:
         # Analyze button
         ttk.Button(main_frame, text="Analyze Photos", command=self.analyze_photos,
                    style='Accent.TButton').grid(row=6, column=1, pady=15)
-        
+
         # Progress bar
         self.progress = ttk.Progressbar(main_frame, length=400, mode='indeterminate')
         self.progress.grid(row=7, column=0, columnspan=3, pady=10)
@@ -529,6 +649,8 @@ class PhotoSelectorApp:
 
             status = "✓ SELECTED" if result['selected'] else "✗ REJECTED"
             reason = []
+            if result.get('face_count', 0) == 0:
+                reason.append("no faces detected")
             if not result['is_sharp']:
                 reason.append("not sharp enough")
             if not include_vertical and not result['is_horizontal']:
@@ -540,18 +662,69 @@ class PhotoSelectorApp:
             if detect_tilt and abs(result.get('tilt_angle', 0)) > 0.1:
                 tilt_info = f" [Tilt: {result['tilt_angle']:.2f}°]"
 
+            face_info = ""
+            if result.get('face_count', 0) > 0:
+                face_info = f" [Faces: {result['face_count']}]"
+
             self.root.after(0, self.log_message,
                           f"{file_path.name}: {status} "
                           f"[Sharpness: {result['sharpness']:.1f}, "
-                          f"{result['width']}x{result['height']}]{reason_str}{tilt_info}")
+                          f"{result['width']}x{result['height']}]{face_info}{reason_str}{tilt_info}")
         
         selected_count = sum(1 for p in self.photos if p['selected'])
-        self.root.after(0, self.log_message, 
+
+        # Calculate sharpness statistics separately for photos with/without faces
+        photos_with_faces = [p for p in self.photos if p.get('face_count', 0) > 0 and p['sharpness'] > 0]
+        photos_without_faces = [p for p in self.photos if p.get('face_count', 0) == 0 and p['sharpness'] > 0]
+
+        sharpness_stats = "\nSharpness Statistics:\n"
+
+        if photos_with_faces:
+            face_sharpness = [p['sharpness'] for p in photos_with_faces]
+            min_sharp = min(face_sharpness)
+            max_sharp = max(face_sharpness)
+            avg_sharp = np.mean(face_sharpness)
+            median_sharp = np.median(face_sharpness)
+
+            # Calculate percentiles for better threshold suggestion
+            percentile_25 = np.percentile(face_sharpness, 25)
+            percentile_50 = np.percentile(face_sharpness, 50)
+            percentile_75 = np.percentile(face_sharpness, 75)
+
+            sharpness_stats += (f"  Photos WITH faces ({len(photos_with_faces)} photos):\n"
+                              f"    Min: {min_sharp:.1f}\n"
+                              f"    25th percentile: {percentile_25:.1f}\n"
+                              f"    Median (50th): {median_sharp:.1f}\n"
+                              f"    75th percentile: {percentile_75:.1f}\n"
+                              f"    Max: {max_sharp:.1f}\n"
+                              f"    Average: {avg_sharp:.1f}\n"
+                              f"    Suggested threshold (conservative): {percentile_25:.1f}\n"
+                              f"    Suggested threshold (moderate): {median_sharp * 0.6:.1f}\n"
+                              f"    Suggested threshold (strict): {median_sharp * 0.8:.1f}\n\n")
+
+        if photos_without_faces:
+            no_face_sharpness = [p['sharpness'] for p in photos_without_faces]
+            min_sharp = min(no_face_sharpness)
+            max_sharp = max(no_face_sharpness)
+            avg_sharp = np.mean(no_face_sharpness)
+            median_sharp = np.median(no_face_sharpness)
+
+            sharpness_stats += (f"  Photos WITHOUT faces ({len(photos_without_faces)} photos):\n"
+                              f"    Min: {min_sharp:.1f}\n"
+                              f"    Max: {max_sharp:.1f}\n"
+                              f"    Average: {avg_sharp:.1f}\n"
+                              f"    Median: {median_sharp:.1f}\n"
+                              f"    Suggested threshold: {median_sharp * 0.7:.1f} (70% of median)\n\n")
+
+        sharpness_stats += f"  Current threshold: {threshold}\n"
+
+        self.root.after(0, self.log_message,
                        f"\n{'='*60}\n"
                        f"Analysis complete!\n"
                        f"Total photos: {len(self.photos)}\n"
                        f"Selected: {selected_count}\n"
                        f"Rejected: {len(self.photos) - selected_count}\n"
+                       f"{sharpness_stats}"
                        f"{'='*60}\n")
         
         self.root.after(0, self.progress.stop)
@@ -584,25 +757,95 @@ class PhotoSelectorApp:
 
         for i, photo in enumerate(selected_photos, 1):
             try:
-                # Create new filename
-                new_name = f"{project}_{i:04d}.ARW"
+                # Extract original number from filename (e.g., DSC00595 -> 00595)
+                import re
+                original_filename = Path(photo['filename']).stem  # Remove extension
+
+                # Try to extract number from various Sony camera filename formats
+                # DSC00595, _DSC0001, etc.
+                number_match = re.search(r'(\d{4,5})$', original_filename)
+
+                if number_match:
+                    # Use original number from filename
+                    photo_number = number_match.group(1)
+                    new_name = f"{project}_{photo_number}.jpg"
+                else:
+                    # Fallback to sequential numbering if no number found
+                    new_name = f"{project}_{i:04d}.jpg"
+
                 new_path = os.path.join(output_dir, new_name)
 
-                # Copy the photo
-                shutil.copy2(photo['path'], new_path)
+                if not HAS_RAWPY:
+                    # Fallback: just copy the ARW file if rawpy not available
+                    arw_name = f"{project}_{i:04d}.ARW"
+                    arw_path = os.path.join(output_dir, arw_name)
+                    shutil.copy2(photo['path'], arw_path)
+                    self.root.after(0, self.log_message,
+                                  f"Copied: {photo['filename']} → {arw_name} (rawpy not available)")
+                else:
+                    # Convert RAW to JPEG
+                    with rawpy.imread(photo['path']) as raw:
+                        # Process the RAW file with camera white balance
+                        rgb = raw.postprocess(
+                            use_camera_wb=True,
+                            half_size=False,  # Full resolution
+                            no_auto_bright=False,
+                            output_bps=8
+                        )
 
-                # Generate XMP with rotation if tilt was detected
-                tilt_angle = photo.get('tilt_angle', 0.0)
-                xmp_content = generate_xmp_with_rotation(-tilt_angle)  # Negative to correct the tilt
+                        # Convert to PIL Image
+                        img = Image.fromarray(rgb)
+                        original_width, original_height = img.size
 
-                # Create XMP sidecar file
-                xmp_path = os.path.join(output_dir, f"{project}_{i:04d}.xmp")
-                with open(xmp_path, 'w', encoding='utf-8') as f:
-                    f.write(xmp_content)
+                        # Apply rotation if tilt was detected
+                        tilt_angle = photo.get('tilt_angle', 0.0)
+                        if abs(tilt_angle) > 0.1:
+                            # Rotate to correct tilt (negative to correct, expand to avoid clipping)
+                            rotated = img.rotate(-tilt_angle, expand=True, resample=Image.BICUBIC)
 
-                tilt_msg = f" (straightened {abs(tilt_angle):.2f}°)" if abs(tilt_angle) > 0.1 else ""
-                self.root.after(0, self.log_message,
-                              f"Processed: {photo['filename']} → {new_name}{tilt_msg}")
+                            # Calculate the scale needed to fill the original frame after rotation
+                            # When rotating, the image gets larger - we need to crop and zoom to fill
+                            new_width, new_height = rotated.size
+
+                            # Calculate how much we need to zoom to ensure NO black borders at all
+                            # after cropping back to original aspect ratio
+                            import math
+                            angle_rad = abs(math.radians(tilt_angle))
+
+                            # Calculate the scale factor needed to completely eliminate black corners
+                            # This uses a more aggressive calculation to ensure full coverage
+                            # For a rotated rectangle to fit inside the original, we need:
+                            scale = 1.0 / (math.cos(angle_rad) - math.sin(angle_rad) *
+                                          min(original_width / original_height, original_height / original_width))
+
+                            # Add extra zoom buffer (5-10%) to ensure absolutely no black edges
+                            scale *= 1.10  # 10% extra zoom to guarantee no black edges
+
+                            # Resize (zoom) to fill the frame with buffer
+                            zoom_width = int(new_width * scale)
+                            zoom_height = int(new_height * scale)
+                            rotated = rotated.resize((zoom_width, zoom_height), Image.BICUBIC)
+
+                            # Crop from center to original dimensions
+                            left = (zoom_width - original_width) // 2
+                            top = (zoom_height - original_height) // 2
+                            right = left + original_width
+                            bottom = top + original_height
+
+                            img = rotated.crop((left, top, right, bottom))
+
+                        # Save as JPEG with high quality
+                        img.save(new_path, 'JPEG', quality=95, optimize=True)
+
+                    # Generate and save XMP sidecar file with preset
+                    xmp_path = new_path.replace('.jpg', '.xmp')
+                    xmp_content = generate_xmp_with_rotation(tilt_angle)
+                    with open(xmp_path, 'w', encoding='utf-8') as xmp_file:
+                        xmp_file.write(xmp_content)
+
+                    tilt_msg = f" (straightened {abs(tilt_angle):.2f}°)" if abs(tilt_angle) > 0.1 else ""
+                    self.root.after(0, self.log_message,
+                                  f"Converted: {photo['filename']} → {new_name}{tilt_msg} + XMP")
             except Exception as e:
                 self.root.after(0, self.log_message,
                               f"Error processing {photo['filename']}: {e}")

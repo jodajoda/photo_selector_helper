@@ -20,9 +20,10 @@ A desktop application for photographers to automatically select sharp, horizonta
 - Rename all selected photos with custom project name
 - Sequential numbering (e.g., Wedding_0001.ARW, Wedding_0002.ARW)
 
-✅ **XMP Preset Application**
-- Automatically applies your "Emiék" Lightroom/Photoshop preset
-- Creates XMP sidecar files for each selected photo
+✅ **XMP Sidecar Creation**
+- Creates XMP sidecar files with your "Emlék" preset
+- Import to Lightroom/Photoshop and preset is automatically applied
+- Perfect color accuracy using Adobe's processing engine
 
 ✅ **User-Friendly GUI**
 - Simple folder selection
@@ -125,8 +126,9 @@ pip3 install -r requirements.txt
 8. **Process Selected Photos**
    - Click "Process Selected Photos"
    - The app will:
-     - Copy selected photos to output folder
-     - Rename them with project name + sequence number
+     - Convert RAW files to JPEG (basic processing)
+     - Auto-straighten if tilt detected
+     - Rename with project name + sequence number
      - Create XMP sidecar files with your preset
 
 ### Example Output
@@ -134,20 +136,27 @@ pip3 install -r requirements.txt
 If you process 3 photos with project name "Wedding":
 ```
 Output Folder:
-  Wedding_0001.ARW
-  Wedding_0001.xmp
-  Wedding_0002.ARW
-  Wedding_0002.xmp
-  Wedding_0003.ARW
-  Wedding_0003.xmp
+  Wedding_00595.jpg   (Basic JPEG)
+  Wedding_00595.xmp   (Preset sidecar for Lightroom)
+  Wedding_00596.jpg
+  Wedding_00596.xmp
+  Wedding_00597.jpg
+  Wedding_00597.xmp
 ```
 
-### Opening in Photoshop/Lightroom
+### Next Step: Apply Preset in Lightroom
 
-After processing:
-1. Open Photoshop or Lightroom
-2. Import/open the photos from the output folder
-3. The XMP preset will automatically apply your "Emiék" settings!
+For perfect color matching your Photoshop preset:
+
+1. **Open Adobe Lightroom**
+2. **Import** the output folder
+3. Preset is **automatically applied** from XMP sidecars
+4. **Export as JPEG** (File → Export)
+   - Format: JPEG
+   - Quality: 95+
+   - Done!
+
+This gives you **perfect color accuracy** using Adobe's processing engine.
 
 ## How It Works
 
@@ -173,14 +182,13 @@ The app uses **Hough Line Transform** to detect and correct tilted horizons:
 - Adds rotation and auto-crop parameters to XMP preset
 - Non-destructive - original RAW file is unchanged
 
-### XMP Preset
-Your "Emiék" preset includes:
-- White balance adjustment (7415K, +27 tint)
-- Exposure compensation (-0.40)
-- Tone curve adjustments
-- HSL color adjustments
-- Split toning
-- And more!
+### XMP Preset Workflow
+Your "Emlék" preset is stored in XMP sidecar files:
+- XMP files are created alongside each JPEG
+- Lightroom/Photoshop automatically reads XMP sidecars
+- Preset contains: Temperature 7415K, Exposure -0.40, Highlights -100, Shadows +47, Blacks -60, Vibrance +37, custom tone curve, HSL adjustments
+- When imported to Lightroom, preset is automatically applied
+- Export from Lightroom gives perfect color matching your Photoshop preset
 
 ## Troubleshooting
 
