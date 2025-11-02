@@ -1,29 +1,46 @@
-# Photo Selector - Automatic Photo Selection & Renaming Tool
+# Photo Selector - Fully Automated Photo Selection & Processing
 
-A desktop application for photographers to automatically select sharp, horizontal photos and apply XMP presets.
+A desktop application for photographers with **complete end-to-end automation** from RAW file selection to final JPEGs.
+
+## NEW: Fully Automated Photoshop Workflow! 🚀
+
+**Just click "Process Selected Photos" and walk away!** The app automatically:
+1. Selects sharp photos with faces
+2. Copies RAW files with batch renaming
+3. Creates XMP sidecar files with your preset
+4. **Launches Photoshop automatically**
+5. Processes all RAW files with Camera Raw
+6. Exports perfect JPEGs to `final_jpegs` folder
+
+**No manual steps - completely hands-free!**
 
 ## Features
 
-✅ **Automatic Selection**
+✅ **Automatic Photo Selection**
 - Detects sharp photos using advanced sharpness analysis
+- Face detection for better portrait selection
 - Optional filter for horizontal/vertical orientation
 - Adjustable sharpness threshold
-- Choose to include or exclude portrait photos
 
-✅ **Auto-Straightening (NEW!)**
+✅ **Auto-Straightening**
 - Automatically detects tilted horizons using edge detection
 - Corrects rotation angle up to ±10 degrees
-- Auto-crops image to remove black edges after rotation
 - Applied via XMP preset for non-destructive editing
 
 ✅ **Batch Renaming**
-- Rename all selected photos with custom project name
-- Sequential numbering (e.g., Wedding_0001.ARW, Wedding_0002.ARW)
+- Rename all selected RAW files with custom project name
+- Preserves original sequence numbers (e.g., Wedding_00595.ARW)
 
 ✅ **XMP Sidecar Creation**
 - Creates XMP sidecar files with your "Emlék" preset
-- Import to Lightroom/Photoshop and preset is automatically applied
-- Perfect color accuracy using Adobe's processing engine
+- Includes rotation/crop adjustments if tilt detected
+- Perfect color accuracy using Adobe Camera Raw
+
+✅ **Automated Photoshop Integration (NEW!)**
+- Automatically launches Photoshop after file selection
+- Batch processes all RAW files with preset
+- Exports maximum quality JPEGs (Quality 12/12)
+- Output to `final_jpegs` subfolder
 
 ✅ **User-Friendly GUI**
 - Simple folder selection
@@ -123,40 +140,55 @@ pip3 install -r requirements.txt
    - Wait for analysis to complete
    - Review the results in the log
 
-8. **Process Selected Photos**
+8. **Process Selected Photos** (FULLY AUTOMATED!)
    - Click "Process Selected Photos"
-   - The app will:
-     - Convert RAW files to JPEG (basic processing)
-     - Auto-straighten if tilt detected
-     - Rename with project name + sequence number
-     - Create XMP sidecar files with your preset
+   - The app will automatically:
+     - Copy selected RAW files with renamed filenames
+     - Create XMP sidecar files with your "Emlék" preset
+     - **Launch Photoshop automatically**
+     - Process all RAW files with Camera Raw
+     - Export perfect JPEGs to `final_jpegs` subfolder
+   - **Just walk away and let it work!** ☕
 
 ### Example Output
 
 If you process 3 photos with project name "Wedding":
 ```
 Output Folder:
-  Wedding_00595.jpg   (Basic JPEG)
-  Wedding_00595.xmp   (Preset sidecar for Lightroom)
-  Wedding_00596.jpg
-  Wedding_00596.xmp
-  Wedding_00597.jpg
-  Wedding_00597.xmp
+  ├── Wedding_00595.ARW       (Renamed RAW file)
+  ├── Wedding_00595.xmp       (Preset sidecar)
+  ├── Wedding_00596.ARW
+  ├── Wedding_00596.xmp
+  ├── Wedding_00597.ARW
+  ├── Wedding_00597.xmp
+  └── final_jpegs/            (Created automatically by Photoshop!)
+      ├── Wedding_00595.jpg   (Perfect preset applied!)
+      ├── Wedding_00596.jpg
+      └── Wedding_00597.jpg
 ```
 
-### Next Step: Apply Preset in Lightroom
+### Workflow Complete! 🎉
 
-For perfect color matching your Photoshop preset:
+**That's it!** The app handles everything automatically. Your final JPEGs with perfect color grading will be in the `final_jpegs` subfolder.
 
-1. **Open Adobe Lightroom**
-2. **Import** the output folder
+**Time:** ~10 minutes total (5 min analysis + 5 min automated processing - no manual steps!)
+
+---
+
+### Alternative: Manual Lightroom Workflow
+
+If you don't have Photoshop or prefer Lightroom:
+
+1. **Open Adobe Lightroom Classic**
+2. **Import** the output folder (File → Import Photos and Video)
 3. Preset is **automatically applied** from XMP sidecars
 4. **Export as JPEG** (File → Export)
    - Format: JPEG
    - Quality: 95+
-   - Done!
 
-This gives you **perfect color accuracy** using Adobe's processing engine.
+**Time:** ~3 minutes (manual export required)
+
+Both methods give you **perfect color accuracy** using Adobe's Camera Raw engine.
 
 ## How It Works
 

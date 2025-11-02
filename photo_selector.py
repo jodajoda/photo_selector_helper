@@ -25,29 +25,17 @@ except ImportError as e:
     HAS_CV2 = False
     print(f"Import warning: {e}")
 
-# XMP preset template (loaded from your preset)
+# XMP sidecar template (converted from preset to sidecar format)
 XMP_PRESET = """<x:xmpmeta xmlns:x="adobe:ns:meta/" x:xmptk="Adobe XMP Core 7.0-c000 1.000000, 0000/00/00-00:00:00        ">
  <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
   <rdf:Description rdf:about=""
+    xmlns:xmp="http://ns.adobe.com/xap/1.0/"
+    xmlns:photoshop="http://ns.adobe.com/photoshop/1.0/"
+    xmlns:crd="http://ns.adobe.com/camera-raw-defaults/1.0/"
     xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
-   crs:PresetType="Normal"
-   crs:Cluster=""
-   crs:UUID="A04D27A42934411880733CD438F9EEC5"
-   crs:SupportsAmount2="True"
-   crs:SupportsAmount="True"
-   crs:SupportsColor="True"
-   crs:SupportsMonochrome="True"
-   crs:SupportsHighDynamicRange="True"
-   crs:SupportsNormalDynamicRange="True"
-   crs:SupportsSceneReferred="True"
-   crs:SupportsOutputReferred="True"
-   crs:RequiresRGBTables="False"
-   crs:ShowInPresets="True"
-   crs:ShowInQuickActions="False"
-   crs:CameraModelRestriction=""
-   crs:Copyright=""
-   crs:ContactInfo=""
-   crs:Version="17.5"
+   photoshop:SidecarForExtension="ARW"
+   crd:CameraProfile="Adobe Standard"
+   crs:Version="18.0"
    crs:CompatibleVersion="268435456"
    crs:ProcessVersion="15.4"
    crs:WhiteBalance="Custom"
@@ -71,6 +59,14 @@ XMP_PRESET = """<x:xmpmeta xmlns:x="adobe:ns:meta/" x:xmptk="Adobe XMP Core 7.0-
    crs:ParametricShadowSplit="25"
    crs:ParametricMidtoneSplit="50"
    crs:ParametricHighlightSplit="75"
+   crs:Sharpness="40"
+   crs:SharpenRadius="+1.0"
+   crs:SharpenDetail="25"
+   crs:SharpenEdgeMasking="0"
+   crs:LuminanceSmoothing="0"
+   crs:ColorNoiseReduction="25"
+   crs:ColorNoiseReductionDetail="50"
+   crs:ColorNoiseReductionSmoothness="50"
    crs:HueAdjustmentRed="+6"
    crs:HueAdjustmentOrange="-5"
    crs:HueAdjustmentYellow="-6"
@@ -127,6 +123,8 @@ XMP_PRESET = """<x:xmpmeta xmlns:x="adobe:ns:meta/" x:xmptk="Adobe XMP Core 7.0-
    crs:PerspectiveScale="100"
    crs:PerspectiveX="0.00"
    crs:PerspectiveY="0.00"
+   crs:GrainAmount="0"
+   crs:PostCropVignetteAmount="0"
    crs:ShadowTint="0"
    crs:RedHue="0"
    crs:RedSaturation="-14"
@@ -136,36 +134,13 @@ XMP_PRESET = """<x:xmpmeta xmlns:x="adobe:ns:meta/" x:xmptk="Adobe XMP Core 7.0-
    crs:BlueSaturation="0"
    crs:HDREditMode="0"
    crs:CurveRefineSaturation="100"
+   crs:OverrideLookVignette="False"
    crs:ToneCurveName2012="Custom"
+   crs:CameraProfile="Adobe Standard"
+   crs:CameraProfileDigest="8231747EC38F3123A793D07144E134B4"
    crs:HasSettings="True"
-   crs:CropConstrainToWarp="0"
-   crs:AsShotTemperature="6350"
-   crs:AsShotTint="4">
-   <crs:Name>
-    <rdf:Alt>
-     <rdf:li xml:lang="x-default">Emiék</rdf:li>
-    </rdf:Alt>
-   </crs:Name>
-   <crs:ShortName>
-    <rdf:Alt>
-     <rdf:li xml:lang="x-default"/>
-    </rdf:Alt>
-   </crs:ShortName>
-   <crs:SortName>
-    <rdf:Alt>
-     <rdf:li xml:lang="x-default"/>
-    </rdf:Alt>
-   </crs:SortName>
-   <crs:Group>
-    <rdf:Alt>
-     <rdf:li xml:lang="x-default">Családfotózás</rdf:li>
-    </rdf:Alt>
-   </crs:Group>
-   <crs:Description>
-    <rdf:Alt>
-     <rdf:li xml:lang="x-default"/>
-    </rdf:Alt>
-   </crs:Description>
+   crs:HasCrop="False"
+   crs:AlreadyApplied="False">
    <crs:ToneCurvePV2012>
     <rdf:Seq>
      <rdf:li>0, 0</rdf:li>
@@ -212,7 +187,8 @@ XMP_PRESET = """<x:xmpmeta xmlns:x="adobe:ns:meta/" x:xmptk="Adobe XMP Core 7.0-
     crs:Version="1"
     crs:Active="false"
     crs:ImageOrientation="0"
-    crs:FocalRange="0 0 100 100"
+    crs:FocalRange="-80 0 100 180"
+    crs:FocalRangeSource="3"
     crs:BlurAmount="50"
     crs:BokehShape="0"
     crs:BokehShapeDetail="0"
@@ -245,20 +221,37 @@ XMP_PRESET = """<x:xmpmeta xmlns:x="adobe:ns:meta/" x:xmptk="Adobe XMP Core 7.0-
 </x:xmpmeta>"""
 
 
-def generate_xmp_with_rotation(tilt_angle=0.0):
-    """Generate XMP preset with rotation and auto-crop if tilt angle is detected"""
-    # Parse the base XMP and add rotation parameters
-    xmp = XMP_PRESET
+def generate_xmp_with_rotation(tilt_angle=0.0, base_xmp=None):
+    """Generate XMP preset with rotation and auto-crop if tilt angle is detected
+
+    Args:
+        tilt_angle: Rotation angle in degrees
+        base_xmp: Optional custom XMP content to use instead of built-in preset
+    """
+    # Use custom XMP or built-in preset
+    xmp = base_xmp if base_xmp else XMP_PRESET
 
     if abs(tilt_angle) > 0.1:  # Only add rotation if tilt is significant (> 0.1 degrees)
-        # Add rotation parameters before the closing tags
-        rotation_params = f"""   crs:StraightenAngle="{tilt_angle:.2f}"
-   crs:CropConstrainToWarp="1"
-   crs:HasCrop="True"
-"""
-        # Insert before the last crs attributes
-        xmp = xmp.replace('   crs:AsShotTint="4">',
-                         f'   crs:AsShotTint="4"\n{rotation_params}>')
+        # Add rotation parameters before the closing tag
+        rotation_params = f'   crs:StraightenAngle="{tilt_angle:.2f}"'
+
+        # Replace HasCrop flag when rotation is applied
+        xmp = xmp.replace('crs:HasCrop="False"', 'crs:HasCrop="True"')
+
+        # Try to find a good insertion point for the rotation parameter
+        # Look for common closing patterns in XMP files
+        if 'crs:AlreadyApplied="False">' in xmp:
+            # Insert before the closing bracket after AlreadyApplied
+            xmp = xmp.replace('crs:AlreadyApplied="False">',
+                            f'crs:AlreadyApplied="False"\n{rotation_params}>')
+        elif 'crs:HasCrop="True">' in xmp:
+            # Insert after HasCrop if it was just changed
+            xmp = xmp.replace('crs:HasCrop="True">',
+                            f'crs:HasCrop="True"\n{rotation_params}>')
+        else:
+            # Fallback: insert before the first closing rdf:Description tag
+            xmp = xmp.replace('  </rdf:Description>',
+                            f'{rotation_params}\n  </rdf:Description>', 1)
 
     return xmp
 
@@ -523,14 +516,16 @@ class PhotoSelectorApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Photo Selector & Renamer")
-        self.root.geometry("900x700")
+        self.root.geometry("900x750")
 
         self.input_folder = tk.StringVar()
         self.output_folder = tk.StringVar()
         self.project_name = tk.StringVar(value="Project")
-        self.sharpness_threshold = tk.IntVar(value=15)
+        self.sharpness_threshold = tk.IntVar(value=20)
         self.auto_straighten = tk.BooleanVar(value=True)
         self.include_vertical = tk.BooleanVar(value=True)
+        self.preset_file = tk.StringVar(value="(Using built-in preset)")
+        self.custom_xmp_content = None
         self.photos = []
 
         self.create_widgets()
@@ -556,9 +551,25 @@ class PhotoSelectorApp:
         
         # Sharpness threshold
         ttk.Label(main_frame, text="Sharpness Threshold:").grid(row=3, column=0, sticky=tk.W, pady=5)
-        ttk.Scale(main_frame, from_=1, to=100, variable=self.sharpness_threshold,
-                  orient=tk.HORIZONTAL, length=300).grid(row=3, column=1, sticky=tk.W, pady=5, padx=5)
-        ttk.Label(main_frame, textvariable=self.sharpness_threshold).grid(row=3, column=2, pady=5)
+
+        # Create a frame for slider and value
+        threshold_frame = ttk.Frame(main_frame)
+        threshold_frame.grid(row=3, column=1, sticky=tk.W, pady=5, padx=5)
+
+        # Custom scale with 2-unit steps (values: 2, 4, 6, 8, 10, etc.)
+        self.threshold_scale = tk.Scale(
+            threshold_frame,
+            from_=2,
+            to=50,
+            resolution=2,  # Step size of 2
+            variable=self.sharpness_threshold,
+            orient=tk.HORIZONTAL,
+            length=300,
+            tickinterval=10  # Show tick marks every 10 units
+        )
+        self.threshold_scale.pack(side=tk.LEFT)
+
+        ttk.Label(threshold_frame, textvariable=self.sharpness_threshold).pack(side=tk.LEFT, padx=5)
 
         # Auto-straighten checkbox
         ttk.Checkbutton(main_frame, text="Auto-straighten tilted photos (detect and fix horizon tilt)",
@@ -568,39 +579,77 @@ class PhotoSelectorApp:
         ttk.Checkbutton(main_frame, text="Include vertical/portrait photos (not just horizontal)",
                        variable=self.include_vertical).grid(row=5, column=1, sticky=tk.W, pady=5, padx=5)
 
+        # XMP Preset selection
+        ttk.Label(main_frame, text="XMP Preset:").grid(row=6, column=0, sticky=tk.W, pady=5)
+        preset_frame = ttk.Frame(main_frame)
+        preset_frame.grid(row=6, column=1, sticky=tk.W, pady=5, padx=5)
+        ttk.Label(preset_frame, textvariable=self.preset_file, width=40).pack(side=tk.LEFT)
+        ttk.Button(preset_frame, text="Select Custom Preset", command=self.select_preset_file).pack(side=tk.LEFT, padx=5)
+        ttk.Button(preset_frame, text="Use Built-in", command=self.use_builtin_preset).pack(side=tk.LEFT)
+
         # Analyze button
         ttk.Button(main_frame, text="Analyze Photos", command=self.analyze_photos,
-                   style='Accent.TButton').grid(row=6, column=1, pady=15)
+                   style='Accent.TButton').grid(row=7, column=1, pady=15)
 
         # Progress bar
         self.progress = ttk.Progressbar(main_frame, length=400, mode='indeterminate')
-        self.progress.grid(row=7, column=0, columnspan=3, pady=10)
+        self.progress.grid(row=8, column=0, columnspan=3, pady=10)
 
         # Results text area
-        ttk.Label(main_frame, text="Results:").grid(row=8, column=0, sticky=tk.W, pady=5)
+        ttk.Label(main_frame, text="Results:").grid(row=9, column=0, sticky=tk.W, pady=5)
         self.results_text = scrolledtext.ScrolledText(main_frame, width=100, height=20)
-        self.results_text.grid(row=9, column=0, columnspan=3, pady=5)
+        self.results_text.grid(row=10, column=0, columnspan=3, pady=5)
 
         # Process button
         self.process_btn = ttk.Button(main_frame, text="Process Selected Photos",
                                        command=self.process_photos, state='disabled')
-        self.process_btn.grid(row=10, column=1, pady=15)
+        self.process_btn.grid(row=11, column=1, pady=15)
 
         # Configure grid weights
         self.root.columnconfigure(0, weight=1)
         self.root.rowconfigure(0, weight=1)
         main_frame.columnconfigure(1, weight=1)
-        main_frame.rowconfigure(9, weight=1)
-    
+        main_frame.rowconfigure(10, weight=1)
+
     def select_input_folder(self):
         folder = filedialog.askdirectory(title="Select Input Folder with ARW Photos")
         if folder:
             self.input_folder.set(folder)
-    
+
     def select_output_folder(self):
         folder = filedialog.askdirectory(title="Select Output Folder")
         if folder:
             self.output_folder.set(folder)
+
+    def select_preset_file(self):
+        file = filedialog.askopenfilename(
+            title="Select XMP Preset File",
+            filetypes=[("XMP Files", "*.xmp"), ("All Files", "*.*")]
+        )
+        if file:
+            try:
+                with open(file, 'r', encoding='utf-8') as f:
+                    self.custom_xmp_content = f.read()
+
+                # Validate that it's a proper XMP file
+                if '<x:xmpmeta' not in self.custom_xmp_content or 'crs:' not in self.custom_xmp_content:
+                    messagebox.showerror("Invalid XMP",
+                                       "The selected file does not appear to be a valid Camera Raw XMP preset.")
+                    self.custom_xmp_content = None
+                    return
+
+                filename = Path(file).name
+                self.preset_file.set(filename)
+                self.log_message(f"Loaded custom preset: {filename}")
+
+            except Exception as e:
+                messagebox.showerror("Error Loading Preset", f"Could not load preset file:\n{e}")
+                self.custom_xmp_content = None
+
+    def use_builtin_preset(self):
+        self.custom_xmp_content = None
+        self.preset_file.set("(Using built-in preset)")
+        self.log_message("Using built-in XMP preset")
     
     def log_message(self, message):
         self.results_text.insert(tk.END, message + "\n")
@@ -647,85 +696,42 @@ class PhotoSelectorApp:
             result['filename'] = file_path.name
             self.photos.append(result)
 
-            status = "✓ SELECTED" if result['selected'] else "✗ REJECTED"
-            reason = []
-            if result.get('face_count', 0) == 0:
-                reason.append("no faces detected")
-            if not result['is_sharp']:
-                reason.append("not sharp enough")
-            if not include_vertical and not result['is_horizontal']:
-                reason.append("vertical orientation")
+            # Log all photos with status
+            status_icon = "✓" if result['selected'] else "✗"
+            status_parts = [f"{status_icon} {file_path.name}"]
 
-            reason_str = f" ({', '.join(reason)})" if reason else ""
+            # Add sharpness value
+            status_parts.append(f"Sharp: {result['sharpness']:.1f}")
 
-            tilt_info = ""
-            if detect_tilt and abs(result.get('tilt_angle', 0)) > 0.1:
-                tilt_info = f" [Tilt: {result['tilt_angle']:.2f}°]"
-
-            face_info = ""
+            # Add face count if faces detected
             if result.get('face_count', 0) > 0:
-                face_info = f" [Faces: {result['face_count']}]"
+                status_parts.append(f"Faces: {result['face_count']}")
 
-            self.root.after(0, self.log_message,
-                          f"{file_path.name}: {status} "
-                          f"[Sharpness: {result['sharpness']:.1f}, "
-                          f"{result['width']}x{result['height']}]{face_info}{reason_str}{tilt_info}")
+            # Add tilt if detected
+            if detect_tilt and abs(result.get('tilt_angle', 0)) > 0.1:
+                status_parts.append(f"Tilt: {result['tilt_angle']:.2f}°")
+
+            # Add rejection reason if not selected
+            if not result['selected']:
+                reasons = []
+                if result.get('face_count', 0) == 0:
+                    reasons.append("no faces")
+                if not result['is_sharp']:
+                    reasons.append(f"low sharpness (<{threshold})")
+                if not include_vertical and not result['is_horizontal']:
+                    reasons.append("vertical")
+                if reasons:
+                    status_parts.append(f"({', '.join(reasons)})")
+
+            self.root.after(0, self.log_message, " | ".join(status_parts))
         
         selected_count = sum(1 for p in self.photos if p['selected'])
 
-        # Calculate sharpness statistics separately for photos with/without faces
-        photos_with_faces = [p for p in self.photos if p.get('face_count', 0) > 0 and p['sharpness'] > 0]
-        photos_without_faces = [p for p in self.photos if p.get('face_count', 0) == 0 and p['sharpness'] > 0]
-
-        sharpness_stats = "\nSharpness Statistics:\n"
-
-        if photos_with_faces:
-            face_sharpness = [p['sharpness'] for p in photos_with_faces]
-            min_sharp = min(face_sharpness)
-            max_sharp = max(face_sharpness)
-            avg_sharp = np.mean(face_sharpness)
-            median_sharp = np.median(face_sharpness)
-
-            # Calculate percentiles for better threshold suggestion
-            percentile_25 = np.percentile(face_sharpness, 25)
-            percentile_50 = np.percentile(face_sharpness, 50)
-            percentile_75 = np.percentile(face_sharpness, 75)
-
-            sharpness_stats += (f"  Photos WITH faces ({len(photos_with_faces)} photos):\n"
-                              f"    Min: {min_sharp:.1f}\n"
-                              f"    25th percentile: {percentile_25:.1f}\n"
-                              f"    Median (50th): {median_sharp:.1f}\n"
-                              f"    75th percentile: {percentile_75:.1f}\n"
-                              f"    Max: {max_sharp:.1f}\n"
-                              f"    Average: {avg_sharp:.1f}\n"
-                              f"    Suggested threshold (conservative): {percentile_25:.1f}\n"
-                              f"    Suggested threshold (moderate): {median_sharp * 0.6:.1f}\n"
-                              f"    Suggested threshold (strict): {median_sharp * 0.8:.1f}\n\n")
-
-        if photos_without_faces:
-            no_face_sharpness = [p['sharpness'] for p in photos_without_faces]
-            min_sharp = min(no_face_sharpness)
-            max_sharp = max(no_face_sharpness)
-            avg_sharp = np.mean(no_face_sharpness)
-            median_sharp = np.median(no_face_sharpness)
-
-            sharpness_stats += (f"  Photos WITHOUT faces ({len(photos_without_faces)} photos):\n"
-                              f"    Min: {min_sharp:.1f}\n"
-                              f"    Max: {max_sharp:.1f}\n"
-                              f"    Average: {avg_sharp:.1f}\n"
-                              f"    Median: {median_sharp:.1f}\n"
-                              f"    Suggested threshold: {median_sharp * 0.7:.1f} (70% of median)\n\n")
-
-        sharpness_stats += f"  Current threshold: {threshold}\n"
-
+        # Simple summary
         self.root.after(0, self.log_message,
-                       f"\n{'='*60}\n"
-                       f"Analysis complete!\n"
-                       f"Total photos: {len(self.photos)}\n"
-                       f"Selected: {selected_count}\n"
-                       f"Rejected: {len(self.photos) - selected_count}\n"
-                       f"{sharpness_stats}"
-                       f"{'='*60}\n")
+                       f"\n{'='*50}\n"
+                       f"Analysis complete: {selected_count}/{len(self.photos)} photos selected\n"
+                       f"{'='*50}\n")
         
         self.root.after(0, self.progress.stop)
         self.root.after(0, lambda: self.process_btn.config(state='normal'))
@@ -768,99 +774,112 @@ class PhotoSelectorApp:
                 if number_match:
                     # Use original number from filename
                     photo_number = number_match.group(1)
-                    new_name = f"{project}_{photo_number}.jpg"
+                    new_base_name = f"{project}_{photo_number}"
                 else:
                     # Fallback to sequential numbering if no number found
-                    new_name = f"{project}_{i:04d}.jpg"
+                    new_base_name = f"{project}_{i:04d}"
 
-                new_path = os.path.join(output_dir, new_name)
+                # Get original extension (ARW, CR2, NEF, etc.)
+                original_ext = Path(photo['path']).suffix.upper()
+                new_raw_name = f"{new_base_name}{original_ext}"
+                new_raw_path = os.path.join(output_dir, new_raw_name)
 
-                if not HAS_RAWPY:
-                    # Fallback: just copy the ARW file if rawpy not available
-                    arw_name = f"{project}_{i:04d}.ARW"
-                    arw_path = os.path.join(output_dir, arw_name)
-                    shutil.copy2(photo['path'], arw_path)
-                    self.root.after(0, self.log_message,
-                                  f"Copied: {photo['filename']} → {arw_name} (rawpy not available)")
+                # Copy RAW file (don't convert to JPEG - Photoshop will do that)
+                shutil.copy2(photo['path'], new_raw_path)
+
+                # Generate and save XMP sidecar file with preset (including rotation if detected)
+                tilt_angle = photo.get('tilt_angle', 0.0)
+                xmp_path = new_raw_path.replace(original_ext, '.xmp')
+
+                # Use custom XMP if loaded, otherwise use built-in preset
+                if self.custom_xmp_content:
+                    xmp_content = generate_xmp_with_rotation(tilt_angle, base_xmp=self.custom_xmp_content)
                 else:
-                    # Convert RAW to JPEG
-                    with rawpy.imread(photo['path']) as raw:
-                        # Process the RAW file with camera white balance
-                        rgb = raw.postprocess(
-                            use_camera_wb=True,
-                            half_size=False,  # Full resolution
-                            no_auto_bright=False,
-                            output_bps=8
-                        )
-
-                        # Convert to PIL Image
-                        img = Image.fromarray(rgb)
-                        original_width, original_height = img.size
-
-                        # Apply rotation if tilt was detected
-                        tilt_angle = photo.get('tilt_angle', 0.0)
-                        if abs(tilt_angle) > 0.1:
-                            # Rotate to correct tilt (negative to correct, expand to avoid clipping)
-                            rotated = img.rotate(-tilt_angle, expand=True, resample=Image.BICUBIC)
-
-                            # Calculate the scale needed to fill the original frame after rotation
-                            # When rotating, the image gets larger - we need to crop and zoom to fill
-                            new_width, new_height = rotated.size
-
-                            # Calculate how much we need to zoom to ensure NO black borders at all
-                            # after cropping back to original aspect ratio
-                            import math
-                            angle_rad = abs(math.radians(tilt_angle))
-
-                            # Calculate the scale factor needed to completely eliminate black corners
-                            # This uses a more aggressive calculation to ensure full coverage
-                            # For a rotated rectangle to fit inside the original, we need:
-                            scale = 1.0 / (math.cos(angle_rad) - math.sin(angle_rad) *
-                                          min(original_width / original_height, original_height / original_width))
-
-                            # Add extra zoom buffer (5-10%) to ensure absolutely no black edges
-                            scale *= 1.10  # 10% extra zoom to guarantee no black edges
-
-                            # Resize (zoom) to fill the frame with buffer
-                            zoom_width = int(new_width * scale)
-                            zoom_height = int(new_height * scale)
-                            rotated = rotated.resize((zoom_width, zoom_height), Image.BICUBIC)
-
-                            # Crop from center to original dimensions
-                            left = (zoom_width - original_width) // 2
-                            top = (zoom_height - original_height) // 2
-                            right = left + original_width
-                            bottom = top + original_height
-
-                            img = rotated.crop((left, top, right, bottom))
-
-                        # Save as JPEG with high quality
-                        img.save(new_path, 'JPEG', quality=95, optimize=True)
-
-                    # Generate and save XMP sidecar file with preset
-                    xmp_path = new_path.replace('.jpg', '.xmp')
                     xmp_content = generate_xmp_with_rotation(tilt_angle)
-                    with open(xmp_path, 'w', encoding='utf-8') as xmp_file:
-                        xmp_file.write(xmp_content)
 
-                    tilt_msg = f" (straightened {abs(tilt_angle):.2f}°)" if abs(tilt_angle) > 0.1 else ""
+                with open(xmp_path, 'w', encoding='utf-8') as xmp_file:
+                    xmp_file.write(xmp_content)
+
+                # Simple copy confirmation - only log if tilt detected
+                if abs(tilt_angle) > 0.1:
                     self.root.after(0, self.log_message,
-                                  f"Converted: {photo['filename']} → {new_name}{tilt_msg} + XMP")
+                                  f"{i}. {new_raw_name} | Tilt: {abs(tilt_angle):.2f}°")
+
             except Exception as e:
                 self.root.after(0, self.log_message,
                               f"Error processing {photo['filename']}: {e}")
-        
-        self.root.after(0, self.log_message, 
-                       f"\n{'='*60}\n"
-                       f"Processing complete!\n"
-                       f"Processed {len(selected_photos)} photos\n"
-                       f"Output folder: {output_dir}\n"
-                       f"{'='*60}\n")
-        
+
+        self.root.after(0, self.log_message,
+                       f"\n{'='*50}\n"
+                       f"Done! {len(selected_photos)} files copied to:\n{output_dir}\n"
+                       f"{'='*50}\n")
+
+        # Check if Photoshop is installed before attempting automation
+        photoshop_installed = os.path.exists("/Applications/Adobe Photoshop 2026") or \
+                             os.path.exists("/Applications/Adobe Photoshop 2025") or \
+                             os.path.exists("/Applications/Adobe Photoshop 2024") or \
+                             os.path.exists("/Applications/Adobe Photoshop 2023") or \
+                             os.path.exists("/Applications/Adobe Photoshop 2022")
+
+        if not photoshop_installed:
+            self.root.after(0, self.log_message,
+                           f"\n{'='*60}\n"
+                           f"NEXT STEP: Import to Lightroom\n"
+                           f"{'='*60}\n"
+                           f"Photoshop not found on this system.\n"
+                           f"To apply your preset and export JPEGs:\n\n"
+                           f"1. Open Adobe Lightroom CC\n"
+                           f"2. Import folder: {output_dir}\n"
+                           f"3. Preset will be automatically applied from XMP files\n"
+                           f"4. Export as JPEG (Quality 95+)\n"
+                           f"{'='*60}\n")
+        else:
+            # Launch Photoshop automation
+            self.root.after(0, self.log_message, "\nLaunching Photoshop...\n")
+
+            try:
+                import subprocess
+                script_dir = Path(__file__).parent
+                photoshop_script = script_dir / "apply_preset_photoshop.sh"
+
+                if photoshop_script.exists():
+                    # Run Photoshop automation script with output folder as argument
+                    result = subprocess.run(
+                        [str(photoshop_script), output_dir],
+                        capture_output=True,
+                        text=True
+                    )
+
+                    if result.returncode == 0:
+                        self.root.after(0, self.log_message,
+                                       f"Photoshop is processing. PDF will be: {output_dir}/photo_grid.pdf\n")
+                    else:
+                        self.root.after(0, self.log_message,
+                                       f"Error: Photoshop script failed (code {result.returncode})\n")
+                else:
+                    self.root.after(0, self.log_message,
+                                   f"Error: Script not found. Run manually: ./apply_preset_photoshop.sh \"{output_dir}\"\n")
+            except Exception as e:
+                self.root.after(0, self.log_message,
+                               f"Error launching Photoshop: {e}\n")
+
         self.root.after(0, self.progress.stop)
-        self.root.after(0, lambda: messagebox.showinfo("Success", 
-                       f"Processed {len(selected_photos)} photos!\n\n"
-                       f"Files saved to:\n{output_dir}"))
+
+        if photoshop_installed:
+            self.root.after(0, lambda: messagebox.showinfo("Success",
+                           f"Copied {len(selected_photos)} RAW files + XMP sidecars!\n\n"
+                           f"RAW files saved to:\n{output_dir}\n\n"
+                           f"Photoshop is now processing...\n"
+                           f"PDF will be saved to:\n{output_dir}/photo_grid.pdf"))
+        else:
+            self.root.after(0, lambda: messagebox.showinfo("Success",
+                           f"Copied {len(selected_photos)} RAW files + XMP sidecars!\n\n"
+                           f"RAW files saved to:\n{output_dir}\n\n"
+                           f"NEXT STEP:\n"
+                           f"1. Open Adobe Lightroom CC\n"
+                           f"2. Import the output folder\n"
+                           f"3. Preset will be auto-applied\n"
+                           f"4. Export as JPEG"))
 
 
 def main():
