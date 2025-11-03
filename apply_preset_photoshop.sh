@@ -16,7 +16,7 @@ if [ -n "$INPUT_FOLDER" ]; then
     echo "Starting Photoshop batch processing..."
     echo "Input folder: $INPUT_FOLDER"
     echo "Script: $JSX_SCRIPT"
-    echo "Output: $INPUT_FOLDER/photo_grid.pdf"
+    echo "Output: $INPUT_FOLDER/final_jpegs/"
 
     # Create a temporary JSX file with the folder path embedded directly
     TEMP_JSX=$(mktemp /tmp/photoshop_batch_XXXXXX.jsx)
@@ -69,8 +69,7 @@ function main() {
         return;
     }
 
-    // Process each file and store processed documents
-    var processedDocs = [];
+    // Process each file
     var successCount = 0;
     var errorCount = 0;
 
@@ -93,11 +92,13 @@ function main() {
                     var watermarkApplied = applyWatermark(doc, watermarkFile, WATERMARK_OPACITY, WATERMARK_POSITION, WATERMARK_SIZE);
                 }
 
-                // Store processed document for PDF creation
-                processedDocs.push({
-                    doc: doc,
-                    name: rawFile.name.replace(/\.[^\.]+\$/, "")
-                });
+                // Save as high-quality JPEG
+                var baseName = rawFile.name.replace(/\\.[^\\.]+\\$/, "");
+                var jpegFile = new File(outputFolder + "/" + baseName + ".jpg");
+                saveAsJPEG(doc, jpegFile, JPEG_QUALITY);
+
+                // Close document
+                doc.close(SaveOptions.DONOTSAVECHANGES);
 
                 successCount++;
             } else {
@@ -108,23 +109,12 @@ function main() {
         }
     }
 
-    // Create PDF with all processed images in a grid
-    if (processedDocs.length > 0) {
-        var pdfFile = new File(sourceFolder + "/photo_grid.pdf");
-        createPDFGrid(processedDocs, pdfFile);
-
-        // Close all processed documents
-        for (var i = 0; i < processedDocs.length; i++) {
-            processedDocs[i].doc.close(SaveOptions.DONOTSAVECHANGES);
-        }
-    }
-
     // Show completion message
-    alert("PDF creation complete!\\n\\n" +
+    alert("JPEG conversion complete!\\n\\n" +
           "Processed: " + rawFiles.length + " files\\n" +
           "Success: " + successCount + "\\n" +
           "Errors: " + errorCount + "\\n\\n" +
-          "PDF saved to:\\n" + pdfFile.fsName);
+          "JPEGs saved to:\\n" + outputFolder.fsName);
 }
 
 // Get all RAW files from folder
@@ -256,12 +246,12 @@ function createPDFGrid(processedDocs, pdfFile) {
         var availableWidth = PDF_PAGE_WIDTH - (PDF_MARGIN * 2);
         var availableHeight = PDF_PAGE_HEIGHT - (PDF_MARGIN * 2);
 
-        var spacing = 15; // Spacing between images in points
+        var spacing = 20; // Spacing between images in points
         var cellWidth = (availableWidth - (spacing * (imagesPerRow - 1))) / imagesPerRow;
 
         // Assume landscape images (adjust cell height based on 3:2 aspect ratio + filename space)
         var imageHeight = cellWidth * (2/3);
-        var cellHeight = imageHeight + FILENAME_HEIGHT; // Add space for filename
+        var cellHeight = imageHeight + FILENAME_HEIGHT + 10; // Add space for filename + extra padding
 
         var imagesPerColumn = Math.floor((availableHeight + spacing) / (cellHeight + spacing));
         var imagesPerPage = imagesPerRow * imagesPerColumn;
@@ -286,33 +276,38 @@ function createPDFGrid(processedDocs, pdfFile) {
                 var row = Math.floor(i / imagesPerRow);
                 var col = i % imagesPerRow;
 
-                var xPos = PDF_MARGIN + (col * (cellWidth + spacing));
-                var yPos = PDF_MARGIN + (row * (cellHeight + spacing));
+                // Calculate positions in points
+                var xPosPoints = PDF_MARGIN + (col * (cellWidth + spacing));
+                var yPosPoints = PDF_MARGIN + (row * (cellHeight + spacing));
+
+                // Convert to pixels at PDF resolution
+                var xPos = (xPosPoints / 72) * PDF_RESOLUTION;
+                var yPos = (yPosPoints / 72) * PDF_RESOLUTION;
 
                 var sourceDoc = processedDocs[imageIndex].doc;
 
                 // Duplicate the source document to avoid modifying original
                 var tempDoc = sourceDoc.duplicate();
 
-                // Resize to fit cell (minus filename space)
-                var targetWidth = cellWidth;
-                var targetHeight = imageHeight;
+                // Calculate target dimensions in pixels
+                var targetWidthPx = (cellWidth / 72) * PDF_RESOLUTION;
+                var targetHeightPx = (imageHeight / 72) * PDF_RESOLUTION;
 
                 // Calculate scale to fit within cell while maintaining aspect ratio
                 var docWidth = tempDoc.width.as("px");
                 var docHeight = tempDoc.height.as("px");
                 var aspectRatio = docWidth / docHeight;
 
-                if (aspectRatio > (cellWidth / imageHeight)) {
+                if (aspectRatio > (targetWidthPx / targetHeightPx)) {
                     // Width is limiting factor
-                    targetHeight = cellWidth / aspectRatio;
+                    targetHeightPx = targetWidthPx / aspectRatio;
                 } else {
                     // Height is limiting factor
-                    targetWidth = imageHeight * aspectRatio;
+                    targetWidthPx = targetHeightPx * aspectRatio;
                 }
 
                 // Resize image with high quality resampling at PDF resolution
-                tempDoc.resizeImage(UnitValue(targetWidth, "px"), UnitValue(targetHeight, "px"), PDF_RESOLUTION, ResampleMethod.BICUBIC);
+                tempDoc.resizeImage(UnitValue(targetWidthPx, "px"), UnitValue(targetHeightPx, "px"), PDF_RESOLUTION, ResampleMethod.BICUBIC);
 
                 // Select all and copy
                 tempDoc.selection.selectAll();
@@ -328,8 +323,11 @@ function createPDFGrid(processedDocs, pdfFile) {
                 var layerWidth = bounds[2] - bounds[0];
                 var layerHeight = bounds[3] - bounds[1];
 
+                // Calculate cell width in pixels
+                var cellWidthPx = (cellWidth / 72) * PDF_RESOLUTION;
+
                 // Center horizontally in cell, align to top
-                var centerX = xPos + (cellWidth / 2) - (layerWidth.as("px") / 2);
+                var centerX = xPos + (cellWidthPx / 2) - (layerWidth.as("px") / 2);
                 var topY = yPos;
 
                 var moveX = centerX - bounds[0].as("px");
@@ -347,9 +345,10 @@ function createPDFGrid(processedDocs, pdfFile) {
                     var textItem = textLayer.textItem;
 
                     // Position text first (required before setting content)
-                    var textX = xPos + (cellWidth / 2);
-                    var textY = yPos + layerHeight.as("px") + 15;
-                    textItem.position = [textX, textY];
+                    var imageHeightPx = (imageHeight / 72) * PDF_RESOLUTION;
+                    var textXCenter = xPos + (cellWidthPx / 2);
+                    var textY = yPos + imageHeightPx + ((12 / 72) * PDF_RESOLUTION);
+                    textItem.position = [textXCenter, textY];
 
                     // Set text properties
                     textItem.contents = processedDocs[imageIndex].name;
@@ -409,9 +408,26 @@ try {
 }
 JSXEOF
 
+    # Auto-detect installed Photoshop version
+    PHOTOSHOP_APP=""
+    for year in 2026 2025 2024 2023 2022 2021 2020; do
+        if [ -d "/Applications/Adobe Photoshop $year" ]; then
+            PHOTOSHOP_APP="Adobe Photoshop $year"
+            echo "Found Photoshop: $PHOTOSHOP_APP"
+            break
+        fi
+    done
+
+    if [ -z "$PHOTOSHOP_APP" ]; then
+        echo "Error: Adobe Photoshop not found in /Applications/"
+        echo "Please install Adobe Photoshop or specify the application name manually."
+        rm -f "$TEMP_JSX"
+        exit 1
+    fi
+
     # Run Photoshop with the temporary JSX script
     osascript <<EOF
-tell application "Adobe Photoshop 2026"
+tell application "$PHOTOSHOP_APP"
     activate
     do javascript file "$TEMP_JSX"
 end tell
@@ -428,5 +444,5 @@ fi
 echo ""
 echo "Batch processing complete!"
 if [ -n "$INPUT_FOLDER" ]; then
-    echo "PDF saved to: $INPUT_FOLDER/photo_grid.pdf"
+    echo "JPEGs saved to: $INPUT_FOLDER/final_jpegs/"
 fi

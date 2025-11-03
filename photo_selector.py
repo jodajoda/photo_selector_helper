@@ -5,6 +5,7 @@ For ARW raw photos - selects sharp images with focused faces and converts to JPE
 """
 
 import os
+import sys
 import shutil
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, scrolledtext
@@ -358,7 +359,15 @@ def detect_faces(image_array):
 
         # Load Haar Cascade classifier for face detection
         # Try multiple cascade files (different OpenCV versions store them differently)
+        # Also check bundled location for PyInstaller apps
+        bundled_cascade = None
+        if getattr(sys, 'frozen', False):
+            # Running in PyInstaller bundle
+            bundle_dir = sys._MEIPASS
+            bundled_cascade = os.path.join(bundle_dir, 'cv2', 'data', 'haarcascade_frontalface_default.xml')
+
         cascade_paths = [
+            bundled_cascade,  # Try bundled location first
             cv2.data.haarcascades + 'haarcascade_frontalface_default.xml',
             '/usr/local/share/opencv4/haarcascades/haarcascade_frontalface_default.xml',
             '/usr/share/opencv/haarcascades/haarcascade_frontalface_default.xml',
@@ -366,15 +375,17 @@ def detect_faces(image_array):
 
         face_cascade = None
         for cascade_path in cascade_paths:
-            if os.path.exists(cascade_path):
+            if cascade_path and os.path.exists(cascade_path):
                 face_cascade = cv2.CascadeClassifier(cascade_path)
-                break
+                if not face_cascade.empty():
+                    break
 
         if face_cascade is None or face_cascade.empty():
             # Try to load from cv2.data (most reliable method)
             try:
                 face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
             except:
+                print("WARNING: Could not load face detection cascade - no photos will be selected!")
                 return []
 
         # Detect faces
@@ -516,100 +527,458 @@ class PhotoSelectorApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Photo Selector & Renamer")
-        self.root.geometry("900x750")
+        self.root.geometry("1000x1000")
+
+        # Modern light color scheme
+        self.colors = {
+            'bg': '#f5f7fa',           # Light gray background
+            'card': '#ffffff',         # White card background
+            'accent': '#7c3aed',       # Purple accent
+            'accent_hover': '#6d28d9', # Darker purple hover
+            'success': '#059669',      # Green
+            'text': '#1f2937',         # Dark text
+            'text_secondary': '#6b7280', # Secondary gray text
+            'border': '#e5e7eb',       # Light border
+            'input_bg': '#f9fafb',     # Light input background
+            'input_border': '#d1d5db'  # Input border
+        }
+
+        # Configure root background
+        self.root.configure(bg=self.colors['bg'])
 
         self.input_folder = tk.StringVar()
         self.output_folder = tk.StringVar()
         self.project_name = tk.StringVar(value="Project")
         self.sharpness_threshold = tk.IntVar(value=20)
         self.auto_straighten = tk.BooleanVar(value=True)
-        self.include_vertical = tk.BooleanVar(value=True)
         self.preset_file = tk.StringVar(value="(Using built-in preset)")
         self.custom_xmp_content = None
+        self.watermark_file = tk.StringVar(value="(Using built-in camera icon)")
+        self.watermark_path = None
         self.photos = []
 
+        self.setup_styles()
         self.create_widgets()
-    
+
+        # Update header title when project name changes
+        self.project_name.trace_add('write', self._update_title)
+
+        # Auto-load watermark.png if it exists in the same directory
+        self._load_default_watermark()
+
+    def setup_styles(self):
+        """Setup custom ttk styles for modern appearance"""
+        style = ttk.Style()
+
+        # Try to use a modern theme as base
+        try:
+            style.theme_use('clam')
+        except:
+            pass
+
+        # Configure Frame styles
+        style.configure('Card.TFrame',
+                       background=self.colors['card'],
+                       relief='solid',
+                       borderwidth=1,
+                       bordercolor=self.colors['border'])
+
+        style.configure('TFrame',
+                       background=self.colors['bg'])
+
+        # Configure Label styles
+        style.configure('Title.TLabel',
+                       background=self.colors['card'],
+                       foreground=self.colors['text'],
+                       font=('SF Pro Display', 24, 'bold'))
+
+        style.configure('Subtitle.TLabel',
+                       background=self.colors['card'],
+                       foreground=self.colors['text_secondary'],
+                       font=('SF Pro Text', 11))
+
+        style.configure('TLabel',
+                       background=self.colors['card'],
+                       foreground=self.colors['text'],
+                       font=('SF Pro Text', 12))
+
+        style.configure('Secondary.TLabel',
+                       background=self.colors['card'],
+                       foreground=self.colors['text_secondary'],
+                       font=('SF Pro Text', 10))
+
+        # Configure Entry styles
+        style.configure('TEntry',
+                       fieldbackground=self.colors['input_bg'],
+                       background=self.colors['input_bg'],
+                       foreground=self.colors['text'],
+                       borderwidth=1,
+                       relief='flat')
+
+        # Configure Button styles
+        style.configure('Primary.TButton',
+                       background=self.colors['accent'],
+                       foreground='white',
+                       borderwidth=0,
+                       relief='flat',
+                       font=('SF Pro Text', 12, 'bold'),
+                       padding=(20, 12))
+
+        style.map('Primary.TButton',
+                 background=[('active', self.colors['accent_hover']),
+                           ('pressed', self.colors['accent_hover'])])
+
+        style.configure('Secondary.TButton',
+                       background=self.colors['card'],
+                       foreground=self.colors['text'],
+                       borderwidth=1,
+                       relief='flat',
+                       font=('SF Pro Text', 11),
+                       padding=(15, 8))
+
+        style.map('Secondary.TButton',
+                 background=[('active', self.colors['border']),
+                           ('pressed', self.colors['border'])])
+
+        # Configure Checkbutton styles
+        style.configure('TCheckbutton',
+                       background=self.colors['card'],
+                       foreground=self.colors['text'],
+                       font=('SF Pro Text', 11))
+
+        # Configure Progressbar
+        style.configure('TProgressbar',
+                       background=self.colors['accent'],
+                       troughcolor=self.colors['border'],
+                       borderwidth=0,
+                       relief='flat')
+
     def create_widgets(self):
-        # Main container
-        main_frame = ttk.Frame(self.root, padding="10")
-        main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
-        
-        # Input folder selection
-        ttk.Label(main_frame, text="Input Folder:").grid(row=0, column=0, sticky=tk.W, pady=5)
-        ttk.Entry(main_frame, textvariable=self.input_folder, width=50).grid(row=0, column=1, pady=5, padx=5)
-        ttk.Button(main_frame, text="Browse", command=self.select_input_folder).grid(row=0, column=2, pady=5)
-        
-        # Output folder selection
-        ttk.Label(main_frame, text="Output Folder:").grid(row=1, column=0, sticky=tk.W, pady=5)
-        ttk.Entry(main_frame, textvariable=self.output_folder, width=50).grid(row=1, column=1, pady=5, padx=5)
-        ttk.Button(main_frame, text="Browse", command=self.select_output_folder).grid(row=1, column=2, pady=5)
-        
+        # Main container with padding
+        main_frame = tk.Frame(self.root, bg=self.colors['bg'])
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
+
+        # ===== HEADER SECTION =====
+        header_card = ttk.Frame(main_frame, style='Card.TFrame')
+        header_card.pack(fill=tk.X, pady=(0, 20))
+
+        header_content = tk.Frame(header_card, bg=self.colors['card'])
+        header_content.pack(fill=tk.X, padx=25, pady=20)
+
+        # Title shows project name dynamically
+        self.title_var = tk.StringVar(value="Photo Selector")
+        title_label = ttk.Label(header_content, textvariable=self.title_var, style='Title.TLabel')
+        title_label.pack(anchor=tk.W)
+
+        subtitle_label = ttk.Label(header_content,
+                                   text="Automatic photo selection with face detection and preset application",
+                                   style='Subtitle.TLabel')
+        subtitle_label.pack(anchor=tk.W, pady=(5, 0))
+
+        # ===== SETTINGS CARD =====
+        settings_card = ttk.Frame(main_frame, style='Card.TFrame')
+        settings_card.pack(fill=tk.X, pady=(0, 15))
+
+        settings_content = tk.Frame(settings_card, bg=self.colors['card'])
+        settings_content.pack(fill=tk.X, padx=25, pady=20)
+
+        # Input folder
+        self._create_folder_field(settings_content, "Input Folder",
+                                 self.input_folder, self.select_input_folder, 0)
+
+        # Output folder
+        self._create_folder_field(settings_content, "Output Folder",
+                                 self.output_folder, self.select_output_folder, 1)
+
+        # Separator
+        separator1 = tk.Frame(settings_content, height=1, bg=self.colors['border'])
+        separator1.pack(fill=tk.X, pady=15)
+
         # Project name
-        ttk.Label(main_frame, text="Project Name:").grid(row=2, column=0, sticky=tk.W, pady=5)
-        ttk.Entry(main_frame, textvariable=self.project_name, width=50).grid(row=2, column=1, pady=5, padx=5)
-        
+        project_label = ttk.Label(settings_content, text="Project Name", style='TLabel')
+        project_label.pack(anchor=tk.W, pady=(0, 8))
+
+        project_entry = tk.Entry(settings_content,
+                                textvariable=self.project_name,
+                                font=('SF Pro Text', 12),
+                                bg=self.colors['input_bg'],
+                                fg=self.colors['text'],
+                                insertbackground=self.colors['text'],
+                                relief='flat',
+                                bd=0)
+        project_entry.pack(fill=tk.X, ipady=6, ipadx=12)
+
+        # Separator
+        separator2 = tk.Frame(settings_content, height=1, bg=self.colors['border'])
+        separator2.pack(fill=tk.X, pady=15)
+
         # Sharpness threshold
-        ttk.Label(main_frame, text="Sharpness Threshold:").grid(row=3, column=0, sticky=tk.W, pady=5)
+        threshold_label = ttk.Label(settings_content,
+                                    text=f"Sharpness Threshold",
+                                    style='TLabel')
+        threshold_label.pack(anchor=tk.W, pady=(0, 8))
 
-        # Create a frame for slider and value
-        threshold_frame = ttk.Frame(main_frame)
-        threshold_frame.grid(row=3, column=1, sticky=tk.W, pady=5, padx=5)
+        threshold_container = tk.Frame(settings_content, bg=self.colors['card'])
+        threshold_container.pack(fill=tk.X)
 
-        # Custom scale with 2-unit steps (values: 2, 4, 6, 8, 10, etc.)
         self.threshold_scale = tk.Scale(
-            threshold_frame,
+            threshold_container,
             from_=2,
             to=50,
-            resolution=2,  # Step size of 2
+            resolution=2,
             variable=self.sharpness_threshold,
             orient=tk.HORIZONTAL,
-            length=300,
-            tickinterval=10  # Show tick marks every 10 units
+            bg=self.colors['card'],
+            fg=self.colors['text'],
+            troughcolor=self.colors['input_bg'],
+            highlightthickness=0,
+            sliderrelief='raised',
+            sliderlength=20,
+            width=12,
+            activebackground=self.colors['accent'],
+            font=('SF Pro Text', 10),
+            length=400
         )
-        self.threshold_scale.pack(side=tk.LEFT)
+        self.threshold_scale.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
-        ttk.Label(threshold_frame, textvariable=self.sharpness_threshold).pack(side=tk.LEFT, padx=5)
+        threshold_value_label = tk.Label(threshold_container,
+                                        textvariable=self.sharpness_threshold,
+                                        font=('SF Pro Text', 14, 'bold'),
+                                        bg=self.colors['card'],
+                                        fg=self.colors['accent'],
+                                        width=4)
+        threshold_value_label.pack(side=tk.LEFT, padx=15)
 
-        # Auto-straighten checkbox
-        ttk.Checkbutton(main_frame, text="Auto-straighten tilted photos (detect and fix horizon tilt)",
-                       variable=self.auto_straighten).grid(row=4, column=1, sticky=tk.W, pady=5, padx=5)
+        # Separator
+        separator3 = tk.Frame(settings_content, height=1, bg=self.colors['border'])
+        separator3.pack(fill=tk.X, pady=15)
 
-        # Include vertical photos checkbox
-        ttk.Checkbutton(main_frame, text="Include vertical/portrait photos (not just horizontal)",
-                       variable=self.include_vertical).grid(row=5, column=1, sticky=tk.W, pady=5, padx=5)
+        # Checkboxes
+        check_auto = ttk.Checkbutton(settings_content,
+                                    text="Auto-straighten tilted photos",
+                                    variable=self.auto_straighten,
+                                    style='TCheckbutton')
+        check_auto.pack(anchor=tk.W, pady=5)
 
-        # XMP Preset selection
-        ttk.Label(main_frame, text="XMP Preset:").grid(row=6, column=0, sticky=tk.W, pady=5)
-        preset_frame = ttk.Frame(main_frame)
-        preset_frame.grid(row=6, column=1, sticky=tk.W, pady=5, padx=5)
-        ttk.Label(preset_frame, textvariable=self.preset_file, width=40).pack(side=tk.LEFT)
-        ttk.Button(preset_frame, text="Select Custom Preset", command=self.select_preset_file).pack(side=tk.LEFT, padx=5)
-        ttk.Button(preset_frame, text="Use Built-in", command=self.use_builtin_preset).pack(side=tk.LEFT)
+        # Separator
+        separator4 = tk.Frame(settings_content, height=1, bg=self.colors['border'])
+        separator4.pack(fill=tk.X, pady=15)
 
-        # Analyze button
-        ttk.Button(main_frame, text="Analyze Photos", command=self.analyze_photos,
-                   style='Accent.TButton').grid(row=7, column=1, pady=15)
+        # XMP Preset and Watermark in one row
+        preset_watermark_container = tk.Frame(settings_content, bg=self.colors['card'])
+        preset_watermark_container.pack(fill=tk.X)
 
-        # Progress bar
-        self.progress = ttk.Progressbar(main_frame, length=400, mode='indeterminate')
-        self.progress.grid(row=8, column=0, columnspan=3, pady=10)
+        # XMP Preset (left side)
+        preset_frame = tk.Frame(preset_watermark_container, bg=self.colors['card'])
+        preset_frame.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 15))
 
-        # Results text area
-        ttk.Label(main_frame, text="Results:").grid(row=9, column=0, sticky=tk.W, pady=5)
-        self.results_text = scrolledtext.ScrolledText(main_frame, width=100, height=20)
-        self.results_text.grid(row=10, column=0, columnspan=3, pady=5)
+        preset_label = ttk.Label(preset_frame, text="XMP Preset", style='TLabel')
+        preset_label.pack(anchor=tk.W, pady=(0, 8))
 
-        # Process button
-        self.process_btn = ttk.Button(main_frame, text="Process Selected Photos",
-                                       command=self.process_photos, state='disabled')
-        self.process_btn.grid(row=11, column=1, pady=15)
+        preset_info = ttk.Label(preset_frame,
+                               textvariable=self.preset_file,
+                               style='Secondary.TLabel')
+        preset_info.pack(anchor=tk.W, pady=(0, 10))
 
-        # Configure grid weights
-        self.root.columnconfigure(0, weight=1)
-        self.root.rowconfigure(0, weight=1)
-        main_frame.columnconfigure(1, weight=1)
-        main_frame.rowconfigure(10, weight=1)
+        preset_btn_container = tk.Frame(preset_frame, bg=self.colors['card'])
+        preset_btn_container.pack(fill=tk.X)
+
+        preset_custom_btn = ttk.Button(preset_btn_container,
+                                      text="Select Preset",
+                                      command=self.select_preset_file,
+                                      style='Secondary.TButton')
+        preset_custom_btn.pack(side=tk.LEFT, padx=(0, 10))
+
+        preset_builtin_btn = ttk.Button(preset_btn_container,
+                                       text="Use Built-in",
+                                       command=self.use_builtin_preset,
+                                       style='Secondary.TButton')
+        preset_builtin_btn.pack(side=tk.LEFT)
+
+        # PDF Watermark (right side)
+        watermark_frame = tk.Frame(preset_watermark_container, bg=self.colors['card'])
+        watermark_frame.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        watermark_label = ttk.Label(watermark_frame, text="PDF Watermark", style='TLabel')
+        watermark_label.pack(anchor=tk.W, pady=(0, 8))
+
+        watermark_info = ttk.Label(watermark_frame,
+                                   textvariable=self.watermark_file,
+                                   style='Secondary.TLabel')
+        watermark_info.pack(anchor=tk.W, pady=(0, 10))
+
+        watermark_btn_container = tk.Frame(watermark_frame, bg=self.colors['card'])
+        watermark_btn_container.pack(fill=tk.X)
+
+        watermark_select_btn = ttk.Button(watermark_btn_container,
+                                         text="Select Image",
+                                         command=self.select_watermark_file,
+                                         style='Secondary.TButton')
+        watermark_select_btn.pack(side=tk.LEFT, padx=(0, 10))
+
+        watermark_clear_btn = ttk.Button(watermark_btn_container,
+                                        text="Use Default",
+                                        command=self.clear_watermark,
+                                        style='Secondary.TButton')
+        watermark_clear_btn.pack(side=tk.LEFT)
+
+        # ===== ACTION BUTTONS =====
+        action_container = tk.Frame(main_frame, bg=self.colors['bg'])
+        action_container.pack(fill=tk.X, pady=(0, 15))
+
+        analyze_btn = ttk.Button(action_container,
+                                text="Analyze Photos",
+                                command=self.analyze_photos,
+                                style='Primary.TButton')
+        analyze_btn.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(0, 10))
+
+        self.process_btn = ttk.Button(action_container,
+                                     text="Process Selected Photos",
+                                     command=self.process_photos,
+                                     state='disabled',
+                                     style='Primary.TButton')
+        self.process_btn.pack(side=tk.LEFT, expand=True, fill=tk.X)
+
+        # ===== PROGRESS BAR & STATUS =====
+        progress_container = tk.Frame(main_frame, bg=self.colors['bg'])
+        progress_container.pack(fill=tk.X, pady=(0, 15))
+
+        # Status label above progress bar
+        self.status_label = tk.Label(progress_container,
+                                     text="Ready",
+                                     font=('SF Pro Text', 11),
+                                     bg=self.colors['bg'],
+                                     fg=self.colors['text_secondary'])
+        self.status_label.pack(anchor=tk.W, pady=(0, 5))
+
+        self.progress = ttk.Progressbar(progress_container,
+                                       mode='determinate',
+                                       style='TProgressbar')
+        self.progress.pack(fill=tk.X, ipady=3)
+
+        # ===== RESULTS SECTION =====
+        results_card = ttk.Frame(main_frame, style='Card.TFrame')
+        results_card.pack(fill=tk.BOTH, expand=True, pady=(0, 15))
+
+        results_header = tk.Frame(results_card, bg=self.colors['card'])
+        results_header.pack(fill=tk.X, padx=25, pady=(20, 10))
+
+        results_title = ttk.Label(results_header, text="Results", style='TLabel')
+        results_title.pack(anchor=tk.W)
+
+        results_text_container = tk.Frame(results_card, bg=self.colors['card'])
+        results_text_container.pack(fill=tk.BOTH, expand=True, padx=25, pady=(0, 20))
+
+        self.results_text = scrolledtext.ScrolledText(
+            results_text_container,
+            font=('SF Mono', 11),
+            bg='#ffffff',
+            fg=self.colors['text'],
+            insertbackground=self.colors['text'],
+            relief='solid',
+            borderwidth=1,
+            highlightthickness=0,
+            padx=15,
+            pady=15,
+            wrap=tk.WORD,
+            height=10
+        )
+        self.results_text.pack(fill=tk.BOTH, expand=True)
+
+        # Configure text tags for colored output
+        self.results_text.tag_config('success', foreground=self.colors['success'], font=('SF Mono', 11, 'bold'))
+        self.results_text.tag_config('accent', foreground=self.colors['accent'], font=('SF Mono', 11, 'bold'))
+        self.results_text.tag_config('secondary', foreground=self.colors['text_secondary'])
+        self.results_text.tag_config('error', foreground='#dc2626', font=('SF Mono', 11, 'bold'))
+        self.results_text.tag_config('info', foreground='#0284c7', font=('SF Mono', 11))
+        self.results_text.tag_config('warning', foreground='#ea580c')
+
+        # ===== LOG SECTION =====
+        log_card = ttk.Frame(main_frame, style='Card.TFrame')
+        log_card.pack(fill=tk.BOTH, expand=True)
+
+        log_header = tk.Frame(log_card, bg=self.colors['card'])
+        log_header.pack(fill=tk.X, padx=25, pady=(20, 10))
+
+        log_title = ttk.Label(log_header, text="Activity Log", style='TLabel')
+        log_title.pack(anchor=tk.W)
+
+        log_text_container = tk.Frame(log_card, bg=self.colors['card'])
+        log_text_container.pack(fill=tk.BOTH, expand=True, padx=25, pady=(0, 20))
+
+        self.log_text = scrolledtext.ScrolledText(
+            log_text_container,
+            font=('SF Mono', 10),
+            bg='#ffffff',
+            fg=self.colors['text'],
+            insertbackground=self.colors['text'],
+            relief='solid',
+            borderwidth=1,
+            highlightthickness=0,
+            padx=15,
+            pady=15,
+            wrap=tk.WORD,
+            height=8
+        )
+        self.log_text.pack(fill=tk.BOTH, expand=True)
+
+        # Configure text tags for log
+        self.log_text.tag_config('success', foreground=self.colors['success'], font=('SF Mono', 10, 'bold'))
+        self.log_text.tag_config('accent', foreground=self.colors['accent'], font=('SF Mono', 10, 'bold'))
+        self.log_text.tag_config('secondary', foreground=self.colors['text_secondary'])
+        self.log_text.tag_config('error', foreground='#dc2626', font=('SF Mono', 10, 'bold'))
+        self.log_text.tag_config('info', foreground='#0284c7', font=('SF Mono', 10))
+        self.log_text.tag_config('warning', foreground='#ea580c')
+
+    def _update_title(self, *args):
+        """Update header title based on project name"""
+        project = self.project_name.get().strip()
+        if project and project != "Project":
+            self.title_var.set(f"{project}")
+        else:
+            self.title_var.set("Photo Selector")
+
+    def _load_default_watermark(self):
+        """Auto-load watermark.png if it exists in the script directory"""
+        script_dir = Path(__file__).parent
+        default_watermark = script_dir / "watermark.png"
+
+        if default_watermark.exists():
+            try:
+                # Validate that it's a valid image file
+                img = Image.open(default_watermark)
+                img.close()
+
+                self.watermark_path = str(default_watermark)
+                self.watermark_file.set("watermark.png")
+                print(f"Auto-loaded default watermark: {default_watermark}")
+            except Exception as e:
+                print(f"Could not load default watermark: {e}")
+                self.watermark_path = None
+
+    def _create_folder_field(self, parent, label_text, variable, command, row):
+        """Helper to create a folder selection field"""
+        label = ttk.Label(parent, text=label_text, style='TLabel')
+        label.pack(anchor=tk.W, pady=(0, 8) if row == 0 else (15, 8))
+
+        folder_container = tk.Frame(parent, bg=self.colors['card'])
+        folder_container.pack(fill=tk.X)
+
+        entry = tk.Entry(folder_container,
+                        textvariable=variable,
+                        font=('SF Pro Text', 11),
+                        bg=self.colors['input_bg'],
+                        fg=self.colors['text'],
+                        insertbackground=self.colors['text'],
+                        relief='flat',
+                        bd=0)
+        entry.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=6, ipadx=12)
+
+        browse_btn = ttk.Button(folder_container,
+                               text="Browse",
+                               command=command,
+                               style='Secondary.TButton')
+        browse_btn.pack(side=tk.LEFT, padx=(10, 0))
 
     def select_input_folder(self):
         folder = filedialog.askdirectory(title="Select Input Folder with ARW Photos")
@@ -650,10 +1019,62 @@ class PhotoSelectorApp:
         self.custom_xmp_content = None
         self.preset_file.set("(Using built-in preset)")
         self.log_message("Using built-in XMP preset")
-    
-    def log_message(self, message):
-        self.results_text.insert(tk.END, message + "\n")
+
+    def select_watermark_file(self):
+        file = filedialog.askopenfilename(
+            title="Select Watermark/Logo Image",
+            filetypes=[
+                ("Image Files", "*.png *.jpg *.jpeg *.gif *.bmp"),
+                ("PNG Files", "*.png"),
+                ("JPEG Files", "*.jpg *.jpeg"),
+                ("All Files", "*.*")
+            ]
+        )
+        if file:
+            try:
+                # Validate that it's a valid image file
+                img = Image.open(file)
+                img.close()
+
+                self.watermark_path = file
+                filename = Path(file).name
+                self.watermark_file.set(filename)
+                self.log_message(f"Loaded watermark: {filename}")
+            except Exception as e:
+                messagebox.showerror("Error Loading Image", f"Could not load image file:\n{e}")
+                self.watermark_path = None
+
+    def clear_watermark(self):
+        """Reset to default watermark (watermark.png if exists, otherwise camera icon)"""
+        self._load_default_watermark()
+        if not self.watermark_path:
+            # If watermark.png doesn't exist, use camera icon
+            self.watermark_file.set("(Using built-in camera icon)")
+            self.log_message("Using built-in camera icon")
+        else:
+            self.log_message("Reset to default watermark: watermark.png")
+
+    def log_message(self, message, tag=None):
+        """Log a message to the results text area with optional color tag"""
+        if tag:
+            self.results_text.insert(tk.END, message + "\n", tag)
+        else:
+            self.results_text.insert(tk.END, message + "\n")
         self.results_text.see(tk.END)
+        self.root.update()
+
+    def log_to_activity(self, message, tag=None):
+        """Log a message to the activity log with optional color tag"""
+        if tag:
+            self.log_text.insert(tk.END, message + "\n", tag)
+        else:
+            self.log_text.insert(tk.END, message + "\n")
+        self.log_text.see(tk.END)
+        self.root.update()
+
+    def update_status(self, message):
+        """Update the status label above the progress bar"""
+        self.status_label.config(text=message)
         self.root.update()
     
     def analyze_photos(self):
@@ -661,26 +1082,29 @@ class PhotoSelectorApp:
         if not input_dir or not os.path.exists(input_dir):
             messagebox.showerror("Error", "Please select a valid input folder")
             return
-        
+
         if not self.output_folder.get():
             # Auto-set output folder
             output_dir = os.path.join(input_dir, "selected_photos")
             self.output_folder.set(output_dir)
-        
-        # Clear previous results
+
+        # Clear previous results and logs
         self.results_text.delete(1.0, tk.END)
+        self.log_text.delete(1.0, tk.END)
         self.photos = []
-        
+
         # Find all ARW files
         arw_files = list(Path(input_dir).glob("*.ARW")) + list(Path(input_dir).glob("*.arw"))
-        
+
         if not arw_files:
             messagebox.showwarning("Warning", "No ARW files found in the selected folder")
             return
-        
-        self.log_message(f"Found {len(arw_files)} ARW files. Analyzing...\n")
-        self.progress.start()
-        
+
+        self.log_to_activity(f"Found {len(arw_files)} ARW files in {input_dir}", 'info')
+        self.update_status(f"Preparing to analyze {len(arw_files)} photos...")
+        self.progress['maximum'] = len(arw_files)
+        self.progress['value'] = 0
+
         # Analyze in a separate thread
         thread = threading.Thread(target=self._analyze_thread, args=(arw_files,))
         thread.start()
@@ -688,15 +1112,25 @@ class PhotoSelectorApp:
     def _analyze_thread(self, arw_files):
         threshold = self.sharpness_threshold.get()
         detect_tilt = self.auto_straighten.get()
-        include_vertical = self.include_vertical.get()
+        include_vertical = True  # Always include vertical photos
 
-        for i, file_path in enumerate(arw_files):
+        # Log start of analysis with settings to activity log
+        self.root.after(0, self.log_to_activity,
+                       f"Starting photo analysis...", 'info')
+        self.root.after(0, self.log_to_activity,
+                       f"Settings: Sharpness threshold={threshold}, Auto-straighten={'ON' if detect_tilt else 'OFF'}", 'secondary')
+
+        for i, file_path in enumerate(arw_files, 1):
+            # Update status and progress
+            self.root.after(0, self.update_status, f"Analyzing {i}/{len(arw_files)}: {file_path.name}")
+            self.root.after(0, lambda val=i: self.progress.config(value=val))
+
             result = analyze_photo(str(file_path), threshold, detect_tilt, include_vertical)
             result['path'] = str(file_path)
             result['filename'] = file_path.name
             self.photos.append(result)
 
-            # Log all photos with status
+            # Log all photos with status to results - use color tags
             status_icon = "✓" if result['selected'] else "✗"
             status_parts = [f"{status_icon} {file_path.name}"]
 
@@ -723,17 +1157,37 @@ class PhotoSelectorApp:
                 if reasons:
                     status_parts.append(f"({', '.join(reasons)})")
 
-            self.root.after(0, self.log_message, " | ".join(status_parts))
+            # Use colored output in results area
+            tag = 'success' if result['selected'] else 'secondary'
+            self.root.after(0, self.log_message, " | ".join(status_parts), tag)
         
         selected_count = sum(1 for p in self.photos if p['selected'])
 
-        # Simple summary
+        # Completion summary - add to results
         self.root.after(0, self.log_message,
-                       f"\n{'='*50}\n"
-                       f"Analysis complete: {selected_count}/{len(self.photos)} photos selected\n"
-                       f"{'='*50}\n")
-        
-        self.root.after(0, self.progress.stop)
+                       f"\n{'='*60}", 'accent')
+        self.root.after(0, self.log_message,
+                       f"ANALYSIS COMPLETE", 'success')
+        self.root.after(0, self.log_message,
+                       f"{'='*60}", 'accent')
+        self.root.after(0, self.log_message,
+                       f"Photos analyzed: {len(self.photos)}", 'info')
+        self.root.after(0, self.log_message,
+                       f"Photos selected: {selected_count}", 'success')
+        self.root.after(0, self.log_message,
+                       f"Photos rejected: {len(self.photos) - selected_count}", 'secondary')
+        self.root.after(0, self.log_message,
+                       f"{'='*60}\n", 'accent')
+
+        # Log to activity log
+        self.root.after(0, self.log_to_activity,
+                       f"Analysis complete: {selected_count}/{len(self.photos)} photos selected", 'success')
+
+        # Update status
+        self.root.after(0, self.update_status,
+                       f"Analysis complete: {selected_count} of {len(self.photos)} photos selected")
+
+        self.root.after(0, lambda: self.progress.config(value=0))
         self.root.after(0, lambda: self.process_btn.config(state='normal'))
     
     def process_photos(self):
@@ -741,19 +1195,25 @@ class PhotoSelectorApp:
         if not output_dir:
             messagebox.showerror("Error", "Please select an output folder")
             return
-        
+
         project = self.project_name.get().strip()
         if not project:
             messagebox.showerror("Error", "Please enter a project name")
             return
-        
+
         # Create output directory
         os.makedirs(output_dir, exist_ok=True)
-        
-        self.log_message("\nProcessing selected photos...\n")
-        self.progress.start()
+
+        selected_count = sum(1 for p in self.photos if p['selected'])
+
+        self.log_to_activity(f"\nStarting to process {selected_count} selected photos...", 'info')
+        self.log_to_activity(f"Output directory: {output_dir}", 'secondary')
+        self.update_status(f"Processing {selected_count} photos...")
+
+        self.progress['maximum'] = selected_count
+        self.progress['value'] = 0
         self.process_btn.config(state='disabled')
-        
+
         # Process in a separate thread
         thread = threading.Thread(target=self._process_thread, args=(output_dir, project))
         thread.start()
@@ -763,6 +1223,10 @@ class PhotoSelectorApp:
 
         for i, photo in enumerate(selected_photos, 1):
             try:
+                # Update progress
+                self.root.after(0, self.update_status, f"Processing {i}/{len(selected_photos)}: {photo['filename']}")
+                self.root.after(0, lambda val=i: self.progress.config(value=val))
+
                 # Extract original number from filename (e.g., DSC00595 -> 00595)
                 import re
                 original_filename = Path(photo['filename']).stem  # Remove extension
@@ -787,6 +1251,10 @@ class PhotoSelectorApp:
                 # Copy RAW file (don't convert to JPEG - Photoshop will do that)
                 shutil.copy2(photo['path'], new_raw_path)
 
+                # Log to activity log
+                self.root.after(0, self.log_to_activity,
+                              f"Copied {new_raw_name}", 'info')
+
                 # Generate and save XMP sidecar file with preset (including rotation if detected)
                 tilt_angle = photo.get('tilt_angle', 0.0)
                 xmp_path = new_raw_path.replace(original_ext, '.xmp')
@@ -800,50 +1268,58 @@ class PhotoSelectorApp:
                 with open(xmp_path, 'w', encoding='utf-8') as xmp_file:
                     xmp_file.write(xmp_content)
 
-                # Simple copy confirmation - only log if tilt detected
+                # Log XMP creation with tilt info if detected
                 if abs(tilt_angle) > 0.1:
-                    self.root.after(0, self.log_message,
-                                  f"{i}. {new_raw_name} | Tilt: {abs(tilt_angle):.2f}°")
+                    self.root.after(0, self.log_to_activity,
+                                  f"  → XMP created with {abs(tilt_angle):.2f}° rotation", 'success')
+                else:
+                    self.root.after(0, self.log_to_activity,
+                                  f"  → XMP preset applied", 'secondary')
 
             except Exception as e:
-                self.root.after(0, self.log_message,
-                              f"Error processing {photo['filename']}: {e}")
+                self.root.after(0, self.log_to_activity,
+                              f"Error processing {photo['filename']}: {e}", 'error')
 
-        self.root.after(0, self.log_message,
-                       f"\n{'='*50}\n"
-                       f"Done! {len(selected_photos)} files copied to:\n{output_dir}\n"
-                       f"{'='*50}\n")
+        # Log completion to activity log
+        self.root.after(0, self.log_to_activity,
+                       f"✓ Processing complete! {len(selected_photos)} files copied to {output_dir}", 'success')
+        self.root.after(0, self.update_status,
+                       f"Processing complete: {len(selected_photos)} files copied")
 
-        # Check if Photoshop is installed before attempting automation
-        photoshop_installed = os.path.exists("/Applications/Adobe Photoshop 2026") or \
-                             os.path.exists("/Applications/Adobe Photoshop 2025") or \
-                             os.path.exists("/Applications/Adobe Photoshop 2024") or \
-                             os.path.exists("/Applications/Adobe Photoshop 2023") or \
-                             os.path.exists("/Applications/Adobe Photoshop 2022")
+        # Check if any version of Photoshop is installed
+        photoshop_installed = False
+        photoshop_version = None
+        for year in [2026, 2025, 2024, 2023, 2022, 2021, 2020]:
+            ps_path = f"/Applications/Adobe Photoshop {year}"
+            if os.path.exists(ps_path):
+                photoshop_installed = True
+                photoshop_version = f"Adobe Photoshop {year}"
+                break
 
         if not photoshop_installed:
-            self.root.after(0, self.log_message,
-                           f"\n{'='*60}\n"
-                           f"NEXT STEP: Import to Lightroom\n"
-                           f"{'='*60}\n"
-                           f"Photoshop not found on this system.\n"
-                           f"To apply your preset and export JPEGs:\n\n"
-                           f"1. Open Adobe Lightroom CC\n"
-                           f"2. Import folder: {output_dir}\n"
-                           f"3. Preset will be automatically applied from XMP files\n"
-                           f"4. Export as JPEG (Quality 95+)\n"
-                           f"{'='*60}\n")
+            self.root.after(0, self.log_to_activity,
+                           f"Photoshop not found - import to Lightroom manually", 'warning')
         else:
             # Launch Photoshop automation
-            self.root.after(0, self.log_message, "\nLaunching Photoshop...\n")
+            self.root.after(0, self.log_to_activity,
+                           f"\nStarting Photoshop automation with {photoshop_version}...", 'info')
+            self.root.after(0, self.update_status, "Running Photoshop automation...")
 
             try:
                 import subprocess
-                script_dir = Path(__file__).parent
+                # Find script directory (works for both dev and bundled app)
+                if getattr(sys, 'frozen', False):
+                    # Running in PyInstaller bundle
+                    script_dir = Path(sys._MEIPASS)
+                else:
+                    # Running in normal Python
+                    script_dir = Path(__file__).parent
                 photoshop_script = script_dir / "apply_preset_photoshop.sh"
 
                 if photoshop_script.exists():
                     # Run Photoshop automation script with output folder as argument
+                    self.root.after(0, self.log_to_activity, "[1/2] Converting RAW to JPEG with Photoshop...", 'info')
+
                     result = subprocess.run(
                         [str(photoshop_script), output_dir],
                         capture_output=True,
@@ -851,29 +1327,87 @@ class PhotoSelectorApp:
                     )
 
                     if result.returncode == 0:
-                        self.root.after(0, self.log_message,
-                                       f"Photoshop is processing. PDF will be: {output_dir}/photo_grid.pdf\n")
-                    else:
-                        self.root.after(0, self.log_message,
-                                       f"Error: Photoshop script failed (code {result.returncode})\n")
-                else:
-                    self.root.after(0, self.log_message,
-                                   f"Error: Script not found. Run manually: ./apply_preset_photoshop.sh \"{output_dir}\"\n")
-            except Exception as e:
-                self.root.after(0, self.log_message,
-                               f"Error launching Photoshop: {e}\n")
+                        self.root.after(0, self.log_to_activity, "  ✓ Photoshop conversion complete", 'success')
+                        self.root.after(0, self.log_to_activity, "[2/2] Creating PDF grid from JPEGs...", 'info')
+                        self.root.after(0, self.update_status, "Creating PDF grid...")
 
-        self.root.after(0, self.progress.stop)
+                        # Run Python PDF generator
+                        pdf_script = script_dir / "create_pdf_grid.py"
+                        if pdf_script.exists():
+                            # Use the same Python that's running this script
+                            # Try homebrew python first, fall back to sys.executable
+                            python_exec = sys.executable
+                            if os.path.exists("/opt/homebrew/bin/python3.11"):
+                                python_exec = "/opt/homebrew/bin/python3.11"
+
+                            # Build command arguments
+                            pdf_cmd = [python_exec, str(pdf_script), output_dir, project]
+                            if self.watermark_path:
+                                pdf_cmd.append(self.watermark_path)
+
+                            pdf_result = subprocess.run(
+                                pdf_cmd,
+                                capture_output=True,
+                                text=True
+                            )
+
+                            if pdf_result.returncode == 0:
+                                # Determine PDF filename based on project name
+                                safe_name = project.replace(' ', '_').replace('/', '_').replace('\\', '_')
+                                pdf_filename = f"{safe_name}.pdf" if project and project != "Photo Selection" else "photo_grid.pdf"
+
+                                self.root.after(0, self.log_to_activity,
+                                               f"  ✓ PDF created: {pdf_filename}", 'success')
+                            else:
+                                self.root.after(0, self.log_to_activity,
+                                               f"  ✗ Error creating PDF (exit code {pdf_result.returncode})", 'error')
+                        else:
+                            self.root.after(0, self.log_to_activity,
+                                           "  ✗ PDF generator script not found", 'error')
+                    else:
+                        self.root.after(0, self.log_to_activity,
+                                       f"  ✗ Photoshop script failed (exit code {result.returncode})", 'error')
+                else:
+                    self.root.after(0, self.log_to_activity,
+                                   f"  ✗ Script not found: {photoshop_script}", 'error')
+            except Exception as e:
+                self.root.after(0, self.log_to_activity,
+                               f"  ✗ Error launching Photoshop: {e}", 'error')
+
+        self.root.after(0, lambda: self.progress.config(value=0))
+        self.root.after(0, self.update_status, "Ready")
+
+        # Calculate summary statistics
+        total_photos = len(self.photos)
+        selected_count = len(selected_photos)
+        rejected_count = total_photos - selected_count
 
         if photoshop_installed:
+            safe_name = project.replace(' ', '_').replace('/', '_').replace('\\', '_')
+            pdf_filename = f"{safe_name}.pdf" if project and project != "Photo Selection" else "photo_grid.pdf"
+
             self.root.after(0, lambda: messagebox.showinfo("Success",
-                           f"Copied {len(selected_photos)} RAW files + XMP sidecars!\n\n"
+                           f"PHOTO ANALYSIS SUMMARY\n"
+                           f"{'='*40}\n"
+                           f"Total photos analyzed: {total_photos}\n"
+                           f"Photos selected: {selected_count}\n"
+                           f"Photos rejected: {rejected_count}\n\n"
+                           f"PROCESSING COMPLETE\n"
+                           f"{'='*40}\n"
+                           f"Copied {selected_count} RAW files + XMP sidecars\n\n"
                            f"RAW files saved to:\n{output_dir}\n\n"
                            f"Photoshop is now processing...\n"
-                           f"PDF will be saved to:\n{output_dir}/photo_grid.pdf"))
+                           f"PDF will be saved to:\n{output_dir}/{pdf_filename}"))
         else:
             self.root.after(0, lambda: messagebox.showinfo("Success",
-                           f"Copied {len(selected_photos)} RAW files + XMP sidecars!\n\n"
+                           f"PHOTO ANALYSIS SUMMARY\n"
+                           f"{'='*40}\n"
+                           f"Total photos analyzed: {total_photos}\n"
+                           f"Photos selected: {selected_count}\n"
+                           f"Photos rejected: {rejected_count}\n\n"
+                           f"PROCESSING COMPLETE\n"
+                           f"{'='*40}\n"
+                           f"Copied {selected_count} RAW files + XMP sidecars\n\n"
                            f"RAW files saved to:\n{output_dir}\n\n"
                            f"NEXT STEP:\n"
                            f"1. Open Adobe Lightroom CC\n"

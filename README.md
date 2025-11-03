@@ -2,7 +2,7 @@
 
 A desktop application for photographers with **complete end-to-end automation** from RAW file selection to final JPEGs.
 
-## NEW: Fully Automated Photoshop Workflow! 🚀
+## NEW: Fully Automated Photoshop Workflow + PDF Grid! 🚀
 
 **Just click "Process Selected Photos" and walk away!** The app automatically:
 1. Selects sharp photos with faces
@@ -11,6 +11,7 @@ A desktop application for photographers with **complete end-to-end automation** 
 4. **Launches Photoshop automatically**
 5. Processes all RAW files with Camera Raw
 6. Exports perfect JPEGs to `final_jpegs` folder
+7. **Creates professional PDF grid with all photos**
 
 **No manual steps - completely hands-free!**
 
@@ -85,6 +86,7 @@ pip3 install -r requirements.txt
 - `scipy` - For sharpness calculations
 - `Pillow` - For image manipulation
 - `opencv-python` - For horizon detection and tilt correction
+- `reportlab` - For PDF generation
 
 ## Usage
 
@@ -148,6 +150,7 @@ pip3 install -r requirements.txt
      - **Launch Photoshop automatically**
      - Process all RAW files with Camera Raw
      - Export perfect JPEGs to `final_jpegs` subfolder
+     - **Create professional PDF grid** with all photos (2 per row, with filenames)
    - **Just walk away and let it work!** ☕
 
 ### Example Output
@@ -161,6 +164,7 @@ Output Folder:
   ├── Wedding_00596.xmp
   ├── Wedding_00597.ARW
   ├── Wedding_00597.xmp
+  ├── photo_grid.pdf          (Professional PDF grid - 2 images per row!)
   └── final_jpegs/            (Created automatically by Photoshop!)
       ├── Wedding_00595.jpg   (Perfect preset applied!)
       ├── Wedding_00596.jpg
