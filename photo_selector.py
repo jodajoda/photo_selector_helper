@@ -474,7 +474,7 @@ def calculate_brightness(image_array):
         return 128.0  # Return neutral brightness on error
 
 
-def analyze_photo(file_path, sharpness_threshold=100, detect_tilt=False, include_vertical=True, max_brightness=255, min_brightness=0):
+def analyze_photo(file_path, sharpness_threshold=100, detect_tilt=False, include_vertical=True, max_brightness=255, min_brightness=0, require_faces=True):
     """Analyze a photo for sharpness, orientation, tilt angle, and brightness
 
     Uses face detection to focus sharpness analysis on faces when present.
@@ -487,6 +487,7 @@ def analyze_photo(file_path, sharpness_threshold=100, detect_tilt=False, include
         include_vertical: Whether to include vertical/portrait photos
         max_brightness: Maximum brightness threshold (reject if exceeded)
         min_brightness: Minimum brightness threshold (reject if below)
+        require_faces: Whether to require faces in photos (disable for brand/product photography)
     """
     try:
         tilt_angle = 0.0
@@ -524,17 +525,27 @@ def analyze_photo(file_path, sharpness_threshold=100, detect_tilt=False, include
                     tilt_angle = detect_horizon_angle(img_array_color)
 
         # Determine if photo should be selected based on filters
-        # IMPORTANT: Only select photos with detected faces AND sharp AND not burned out AND not too dark
         has_faces = face_count > 0
         is_not_burned_out = brightness <= max_brightness
         is_not_too_dark = brightness >= min_brightness
 
-        if include_vertical:
-            # Select if sharp AND has faces AND not burned out AND not too dark, regardless of orientation
-            selected = is_sharp and has_faces and is_not_burned_out and is_not_too_dark
+        # Build selection criteria based on settings
+        if require_faces:
+            # Require faces: Only select photos with detected faces AND sharp AND not burned out AND not too dark
+            if include_vertical:
+                # Select if sharp AND has faces AND not burned out AND not too dark, regardless of orientation
+                selected = is_sharp and has_faces and is_not_burned_out and is_not_too_dark
+            else:
+                # Select only if sharp AND has faces AND horizontal AND not burned out AND not too dark
+                selected = is_sharp and has_faces and is_horizontal and is_not_burned_out and is_not_too_dark
         else:
-            # Select only if sharp AND has faces AND horizontal AND not burned out AND not too dark
-            selected = is_sharp and has_faces and is_horizontal and is_not_burned_out and is_not_too_dark
+            # Don't require faces: Select based on sharpness, brightness, and orientation only
+            if include_vertical:
+                # Select if sharp AND not burned out AND not too dark, regardless of orientation
+                selected = is_sharp and is_not_burned_out and is_not_too_dark
+            else:
+                # Select only if sharp AND horizontal AND not burned out AND not too dark
+                selected = is_sharp and is_horizontal and is_not_burned_out and is_not_too_dark
 
         return {
             'sharpness': sharpness_score,
@@ -598,6 +609,7 @@ class PhotoSelectorApp:
         self.min_brightness_threshold = tk.IntVar(value=30)  # Minimum brightness threshold (reject too dark/faded images)
         self.max_brightness_threshold = tk.IntVar(value=220)  # Maximum brightness threshold (reject burned out images)
         self.auto_straighten = tk.BooleanVar(value=True)
+        self.require_faces = tk.BooleanVar(value=True)  # Require face detection (disable for brand/product photography)
         self.preset_file = tk.StringVar(value="(Using built-in preset)")
         self.custom_xmp_content = None
         # Separate presets for dark and light photos
@@ -608,6 +620,7 @@ class PhotoSelectorApp:
         self.watermark_file = tk.StringVar(value="(Using built-in camera icon)")
         self.watermark_path = None
         self.photos = []
+        self.cancel_requested = False
 
         self.setup_styles()
         self.create_widgets()
@@ -973,6 +986,12 @@ class PhotoSelectorApp:
                                     style='TCheckbutton')
         check_auto.pack(anchor=tk.W, pady=5)
 
+        check_faces = ttk.Checkbutton(settings_content,
+                                     text="Require face detection (disable for brand/product photography)",
+                                     variable=self.require_faces,
+                                     style='TCheckbutton')
+        check_faces.pack(anchor=tk.W, pady=5)
+
         # Separator
         separator4 = tk.Frame(settings_content, height=1, bg=self.colors['border'])
         separator4.pack(fill=tk.X, pady=15)
@@ -1070,11 +1089,18 @@ class PhotoSelectorApp:
         action_container = tk.Frame(main_frame, bg=self.colors['bg'])
         action_container.pack(fill=tk.X, pady=(0, 15))
 
-        analyze_btn = ttk.Button(action_container,
+        self.analyze_btn = ttk.Button(action_container,
                                 text="Analyze Photos",
                                 command=self.analyze_photos,
                                 style='Primary.TButton')
-        analyze_btn.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(0, 10))
+        self.analyze_btn.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(0, 10))
+
+        self.cancel_btn = ttk.Button(action_container,
+                                     text="Cancel",
+                                     command=self.cancel_workflow,
+                                     state='disabled',
+                                     style='Secondary.TButton')
+        self.cancel_btn.pack(side=tk.LEFT, padx=(0, 10))
 
         self.process_btn = ttk.Button(action_container,
                                      text="Process Selected Photos",
@@ -1387,7 +1413,14 @@ class PhotoSelectorApp:
         """Update the status label above the progress bar"""
         self.status_label.config(text=message)
         self.root.update()
-    
+
+    def cancel_workflow(self):
+        """Cancel the current workflow (analysis or processing)"""
+        self.cancel_requested = True
+        self.cancel_btn.config(state='disabled')
+        self.update_status("Cancelling...")
+        self.log_to_activity("Workflow cancellation requested by user", 'warning')
+
     def analyze_photos(self):
         input_dir = self.input_folder.get()
         if not input_dir or not os.path.exists(input_dir):
@@ -1416,6 +1449,11 @@ class PhotoSelectorApp:
         self.progress['maximum'] = len(arw_files)
         self.progress['value'] = 0
 
+        # Reset cancel flag and enable cancel button
+        self.cancel_requested = False
+        self.cancel_btn.config(state='normal')
+        self.analyze_btn.config(state='disabled')
+
         # Analyze in a separate thread
         thread = threading.Thread(target=self._analyze_thread, args=(arw_files,))
         thread.start()
@@ -1426,19 +1464,29 @@ class PhotoSelectorApp:
         include_vertical = True  # Always include vertical photos
         max_brightness = self.max_brightness_threshold.get()
         min_brightness = self.min_brightness_threshold.get()
+        require_faces = self.require_faces.get()
 
         # Log start of analysis with settings to activity log
         self.root.after(0, self.log_to_activity,
                        f"Starting photo analysis...", 'info')
         self.root.after(0, self.log_to_activity,
-                       f"Settings: Sharpness={threshold}, Brightness range={min_brightness}-{max_brightness}, Auto-straighten={'ON' if detect_tilt else 'OFF'}", 'secondary')
+                       f"Settings: Sharpness={threshold}, Brightness range={min_brightness}-{max_brightness}, Auto-straighten={'ON' if detect_tilt else 'OFF'}, Require faces={'ON' if require_faces else 'OFF'}", 'secondary')
 
         for i, file_path in enumerate(arw_files, 1):
+            # Check if cancellation was requested
+            if self.cancel_requested:
+                self.root.after(0, self.log_to_activity, "Analysis cancelled by user", 'warning')
+                self.root.after(0, self.update_status, "Cancelled")
+                self.root.after(0, lambda: self.progress.config(value=0))
+                self.root.after(0, lambda: self.analyze_btn.config(state='normal'))
+                self.root.after(0, lambda: self.cancel_btn.config(state='disabled'))
+                return
+
             # Update status and progress
             self.root.after(0, self.update_status, f"Analyzing {i}/{len(arw_files)}: {file_path.name}")
             self.root.after(0, lambda val=i: self.progress.config(value=val))
 
-            result = analyze_photo(str(file_path), threshold, detect_tilt, include_vertical, max_brightness, min_brightness)
+            result = analyze_photo(str(file_path), threshold, detect_tilt, include_vertical, max_brightness, min_brightness, require_faces)
             result['path'] = str(file_path)
             result['filename'] = file_path.name
             self.photos.append(result)
@@ -1467,7 +1515,7 @@ class PhotoSelectorApp:
             # Add rejection reason if not selected
             if not result['selected']:
                 reasons = []
-                if result.get('face_count', 0) == 0:
+                if require_faces and result.get('face_count', 0) == 0:
                     reasons.append("no faces")
                 if not result['is_sharp']:
                     reasons.append(f"low sharpness (<{threshold})")
@@ -1521,6 +1569,8 @@ class PhotoSelectorApp:
                        f"Analysis complete: {selected_count} of {len(self.photos)} photos selected")
 
         self.root.after(0, lambda: self.progress.config(value=0))
+        self.root.after(0, lambda: self.analyze_btn.config(state='normal'))
+        self.root.after(0, lambda: self.cancel_btn.config(state='disabled'))
         self.root.after(0, lambda: self.process_btn.config(state='normal'))
     
     def process_photos(self):
@@ -1545,7 +1595,12 @@ class PhotoSelectorApp:
 
         self.progress['maximum'] = selected_count
         self.progress['value'] = 0
+
+        # Reset cancel flag and enable cancel button
+        self.cancel_requested = False
+        self.cancel_btn.config(state='normal')
         self.process_btn.config(state='disabled')
+        self.analyze_btn.config(state='disabled')
 
         # Process in a separate thread
         thread = threading.Thread(target=self._process_thread, args=(output_dir, project))
@@ -1554,7 +1609,19 @@ class PhotoSelectorApp:
     def _process_thread(self, output_dir, project):
         selected_photos = [p for p in self.photos if p['selected']]
 
+        # Track mapping of original RAW files to new names for Photoshop processing
+        photo_mappings = []
+
         for i, photo in enumerate(selected_photos, 1):
+            # Check if cancellation was requested
+            if self.cancel_requested:
+                self.root.after(0, self.log_to_activity, "Processing cancelled by user", 'warning')
+                self.root.after(0, self.update_status, "Cancelled")
+                self.root.after(0, lambda: self.progress.config(value=0))
+                self.root.after(0, lambda: self.analyze_btn.config(state='normal'))
+                self.root.after(0, lambda: self.cancel_btn.config(state='disabled'))
+                return
+
             try:
                 # Update progress
                 self.root.after(0, self.update_status, f"Processing {i}/{len(selected_photos)}: {photo['filename']}")
@@ -1578,21 +1645,19 @@ class PhotoSelectorApp:
 
                 # Get original extension (ARW, CR2, NEF, etc.)
                 original_ext = Path(photo['path']).suffix.upper()
-                new_raw_name = f"{new_base_name}{original_ext}"
-                new_raw_path = os.path.join(output_dir, new_raw_name)
-
-                # Copy RAW file (don't convert to JPEG - Photoshop will do that)
-                shutil.copy2(photo['path'], new_raw_path)
+                original_raw_path = Path(photo['path'])
 
                 # Log to activity log
                 self.root.after(0, self.log_to_activity,
-                              f"Copied {new_raw_name}", 'info')
+                              f"Processing {original_filename}{original_ext}", 'info')
 
                 # Generate and save XMP sidecar file with preset (including rotation if detected)
                 tilt_angle = photo.get('tilt_angle', 0.0)
                 brightness = photo.get('brightness', 128.0)
                 brightness_threshold = self.brightness_threshold.get()
-                xmp_path = new_raw_path.replace(original_ext, '.xmp')
+
+                # Create XMP sidecar in INPUT folder (next to RAW file)
+                xmp_path = original_raw_path.with_suffix('.xmp')
 
                 # Determine if photo is dark or light based on brightness threshold
                 is_dark = brightness < brightness_threshold
@@ -1615,8 +1680,18 @@ class PhotoSelectorApp:
                         xmp_content = generate_xmp_with_rotation(tilt_angle)
                         preset_type = "light (built-in)"
 
+                # Save XMP sidecar in INPUT folder (stays with original RAW file)
                 with open(xmp_path, 'w', encoding='utf-8') as xmp_file:
                     xmp_file.write(xmp_content)
+
+                # Store mapping for later (for renaming JPEGs)
+                photo_mappings.append({
+                    'original_path': original_raw_path,
+                    'new_basename': new_base_name,
+                    'preset_type': preset_type,
+                    'brightness': brightness,
+                    'tilt_angle': tilt_angle
+                })
 
                 # Log XMP creation with brightness and tilt info
                 if abs(tilt_angle) > 0.1:
@@ -1630,11 +1705,14 @@ class PhotoSelectorApp:
                 self.root.after(0, self.log_to_activity,
                               f"Error processing {photo['filename']}: {e}", 'error')
 
+        # Get input folder from first photo
+        input_dir = str(Path(selected_photos[0]['path']).parent) if selected_photos else None
+
         # Log completion to activity log
         self.root.after(0, self.log_to_activity,
-                       f"✓ Processing complete! {len(selected_photos)} files copied to {output_dir}", 'success')
+                       f"✓ XMP sidecars created in input folder for {len(selected_photos)} photos", 'success')
         self.root.after(0, self.update_status,
-                       f"Processing complete: {len(selected_photos)} files copied")
+                       f"XMP sidecars created: {len(selected_photos)} files in input folder")
 
         # Check if any version of Photoshop is installed
         photoshop_installed = False
@@ -1667,16 +1745,38 @@ class PhotoSelectorApp:
                 photoshop_script = script_dir / "apply_preset_photoshop.sh"
 
                 if photoshop_script.exists():
-                    # Run Photoshop automation script with output folder as argument
+                    # Run Photoshop automation script with INPUT folder as argument
+                    # (RAW files are still in input folder, with temporary XMP sidecars)
                     self.root.after(0, self.log_to_activity, "[1/2] Converting RAW to JPEG with Photoshop...", 'info')
 
                     result = subprocess.run(
-                        [str(photoshop_script), output_dir],
+                        [str(photoshop_script), input_dir],
                         capture_output=True,
                         text=True
                     )
 
                     if result.returncode == 0:
+                        # Move and rename JPEGs from input/final_jpegs to output folder
+                        input_jpegs_folder = Path(input_dir) / "final_jpegs"
+                        if input_jpegs_folder.exists():
+                            for mapping in photo_mappings:
+                                # Find JPEG with original name
+                                original_jpeg_name = mapping['original_path'].stem + ".jpg"
+                                original_jpeg_path = input_jpegs_folder / original_jpeg_name
+
+                                if original_jpeg_path.exists():
+                                    # Move to output folder with new name
+                                    new_jpeg_name = mapping['new_basename'] + ".jpg"
+                                    new_jpeg_path = Path(output_dir) / new_jpeg_name
+                                    shutil.move(str(original_jpeg_path), str(new_jpeg_path))
+
+                            # Clean up the temporary final_jpegs folder
+                            try:
+                                input_jpegs_folder.rmdir()
+                            except:
+                                pass  # Folder might not be empty if there were errors
+
+                        # XMP files remain in input folder (next to RAW files)
                         self.root.after(0, self.log_to_activity, "  ✓ Photoshop conversion complete", 'success')
                         self.root.after(0, self.log_to_activity, "[2/2] Creating PDF grid from JPEGs...", 'info')
                         self.root.after(0, self.update_status, "Creating PDF grid...")
@@ -1725,6 +1825,8 @@ class PhotoSelectorApp:
                                f"  ✗ Error launching Photoshop: {e}", 'error')
 
         self.root.after(0, lambda: self.progress.config(value=0))
+        self.root.after(0, lambda: self.analyze_btn.config(state='normal'))
+        self.root.after(0, lambda: self.cancel_btn.config(state='disabled'))
         self.root.after(0, self.update_status, "Ready")
 
         # Calculate summary statistics
@@ -1744,8 +1846,10 @@ class PhotoSelectorApp:
                            f"Photos rejected: {rejected_count}\n\n"
                            f"PROCESSING COMPLETE\n"
                            f"{'='*40}\n"
-                           f"Copied {selected_count} RAW files + XMP sidecars\n\n"
-                           f"RAW files saved to:\n{output_dir}\n\n"
+                           f"Created {selected_count} XMP sidecars (in input folder)\n"
+                           f"Created {selected_count} JPEGs (in output folder)\n\n"
+                           f"XMP sidecars: {input_dir}\n"
+                           f"JPEGs: {output_dir}\n\n"
                            f"Photoshop is now processing...\n"
                            f"PDF will be saved to:\n{output_dir}/{pdf_filename}"))
         else:
@@ -1757,13 +1861,13 @@ class PhotoSelectorApp:
                            f"Photos rejected: {rejected_count}\n\n"
                            f"PROCESSING COMPLETE\n"
                            f"{'='*40}\n"
-                           f"Copied {selected_count} RAW files + XMP sidecars\n\n"
-                           f"RAW files saved to:\n{output_dir}\n\n"
+                           f"Created {selected_count} XMP sidecars in input folder\n\n"
+                           f"XMP sidecars & RAW files location:\n{input_dir}\n\n"
                            f"NEXT STEP:\n"
                            f"1. Open Adobe Lightroom CC\n"
-                           f"2. Import the output folder\n"
-                           f"3. Preset will be auto-applied\n"
-                           f"4. Export as JPEG"))
+                           f"2. Import the RAW files from input folder\n"
+                           f"3. XMP preset will be auto-applied\n"
+                           f"4. Export as JPEG to:\n   {output_dir}"))
 
 
 def main():
