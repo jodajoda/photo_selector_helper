@@ -451,14 +451,47 @@ def detect_horizon_angle(image_array):
         return 0.0
 
 
-def analyze_photo(file_path, sharpness_threshold=100, detect_tilt=False, include_vertical=True):
-    """Analyze a photo for sharpness, orientation, and tilt angle
+def calculate_brightness(image_array):
+    """Calculate the average brightness/luminance of an image
+
+    Returns:
+        float: Average brightness value (0-255 scale)
+    """
+    try:
+        # Convert to grayscale if needed
+        if len(image_array.shape) == 3:
+            # Use perceptual luminance formula (Y = 0.299*R + 0.587*G + 0.114*B)
+            gray = 0.299 * image_array[:,:,0] + 0.587 * image_array[:,:,1] + 0.114 * image_array[:,:,2]
+        else:
+            gray = image_array
+
+        # Calculate mean brightness
+        brightness = float(np.mean(gray))
+        return brightness
+
+    except Exception as e:
+        print(f"Brightness calculation error: {e}")
+        return 128.0  # Return neutral brightness on error
+
+
+def analyze_photo(file_path, sharpness_threshold=100, detect_tilt=False, include_vertical=True, max_brightness=255, min_brightness=0):
+    """Analyze a photo for sharpness, orientation, tilt angle, and brightness
 
     Uses face detection to focus sharpness analysis on faces when present.
+    Rejects photos that are too bright (burned out/overexposed) or too dark (underexposed/faded).
+
+    Args:
+        file_path: Path to the photo file
+        sharpness_threshold: Minimum sharpness score required
+        detect_tilt: Whether to detect and measure horizon tilt
+        include_vertical: Whether to include vertical/portrait photos
+        max_brightness: Maximum brightness threshold (reject if exceeded)
+        min_brightness: Minimum brightness threshold (reject if below)
     """
     try:
         tilt_angle = 0.0
         face_count = 0
+        brightness = 128.0  # Default mid-brightness
         if not HAS_RAWPY:
             # Fallback: just check file size as proxy
             file_size = os.path.getsize(file_path) / (1024 * 1024)  # MB
@@ -483,20 +516,25 @@ def analyze_photo(file_path, sharpness_threshold=100, detect_tilt=False, include
                 is_sharp = sharpness_score > sharpness_threshold
                 is_horizontal = width > height
 
+                # Calculate brightness
+                brightness = calculate_brightness(img_array_color)
+
                 # Detect tilt angle if requested
                 if detect_tilt and HAS_CV2:
                     tilt_angle = detect_horizon_angle(img_array_color)
 
         # Determine if photo should be selected based on filters
-        # IMPORTANT: Only select photos with detected faces AND sharp
+        # IMPORTANT: Only select photos with detected faces AND sharp AND not burned out AND not too dark
         has_faces = face_count > 0
+        is_not_burned_out = brightness <= max_brightness
+        is_not_too_dark = brightness >= min_brightness
 
         if include_vertical:
-            # Select if sharp AND has faces, regardless of orientation
-            selected = is_sharp and has_faces
+            # Select if sharp AND has faces AND not burned out AND not too dark, regardless of orientation
+            selected = is_sharp and has_faces and is_not_burned_out and is_not_too_dark
         else:
-            # Select only if sharp AND has faces AND horizontal
-            selected = is_sharp and has_faces and is_horizontal
+            # Select only if sharp AND has faces AND horizontal AND not burned out AND not too dark
+            selected = is_sharp and has_faces and is_horizontal and is_not_burned_out and is_not_too_dark
 
         return {
             'sharpness': sharpness_score,
@@ -506,6 +544,9 @@ def analyze_photo(file_path, sharpness_threshold=100, detect_tilt=False, include
             'height': height,
             'tilt_angle': tilt_angle,
             'face_count': face_count,
+            'brightness': brightness,
+            'is_burned_out': brightness > max_brightness,
+            'is_too_dark': brightness < min_brightness,
             'selected': selected
         }
     except Exception as e:
@@ -518,6 +559,9 @@ def analyze_photo(file_path, sharpness_threshold=100, detect_tilt=False, include
             'height': 0,
             'tilt_angle': 0.0,
             'face_count': 0,
+            'brightness': 128.0,
+            'is_burned_out': False,
+            'is_too_dark': False,
             'selected': False,
             'error': str(e)
         }
@@ -527,7 +571,7 @@ class PhotoSelectorApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Photo Selector & Renamer")
-        self.root.geometry("1000x1000")
+        self.root.geometry("1000x900")
 
         # Modern light color scheme
         self.colors = {
@@ -550,9 +594,17 @@ class PhotoSelectorApp:
         self.output_folder = tk.StringVar()
         self.project_name = tk.StringVar(value="Project")
         self.sharpness_threshold = tk.IntVar(value=20)
+        self.brightness_threshold = tk.IntVar(value=100)  # Brightness threshold (0-255) to separate dark/light
+        self.min_brightness_threshold = tk.IntVar(value=30)  # Minimum brightness threshold (reject too dark/faded images)
+        self.max_brightness_threshold = tk.IntVar(value=220)  # Maximum brightness threshold (reject burned out images)
         self.auto_straighten = tk.BooleanVar(value=True)
         self.preset_file = tk.StringVar(value="(Using built-in preset)")
         self.custom_xmp_content = None
+        # Separate presets for dark and light photos
+        self.preset_file_dark = tk.StringVar(value="(Using built-in preset)")
+        self.custom_xmp_content_dark = None
+        self.preset_file_light = tk.StringVar(value="(Using built-in preset)")
+        self.custom_xmp_content_light = None
         self.watermark_file = tk.StringVar(value="(Using built-in camera icon)")
         self.watermark_path = None
         self.photos = []
@@ -677,10 +729,30 @@ class PhotoSelectorApp:
 
         # ===== SETTINGS CARD =====
         settings_card = ttk.Frame(main_frame, style='Card.TFrame')
-        settings_card.pack(fill=tk.X, pady=(0, 15))
+        settings_card.pack(fill=tk.BOTH, expand=True, pady=(0, 15))
 
-        settings_content = tk.Frame(settings_card, bg=self.colors['card'])
-        settings_content.pack(fill=tk.X, padx=25, pady=20)
+        # Create a canvas with scrollbar for settings
+        settings_canvas = tk.Canvas(settings_card, bg=self.colors['card'], highlightthickness=0, height=350)
+        settings_scrollbar = tk.Scrollbar(settings_card, orient="vertical", command=settings_canvas.yview)
+        settings_scrollable_frame = tk.Frame(settings_canvas, bg=self.colors['card'])
+
+        settings_scrollable_frame.bind(
+            "<Configure>",
+            lambda e: settings_canvas.configure(scrollregion=settings_canvas.bbox("all"))
+        )
+
+        settings_canvas.create_window((0, 0), window=settings_scrollable_frame, anchor="nw")
+        settings_canvas.configure(yscrollcommand=settings_scrollbar.set)
+
+        settings_canvas.pack(side="left", fill="both", expand=True, padx=(25, 0), pady=20)
+        settings_scrollbar.pack(side="right", fill="y", padx=(0, 5), pady=20)
+
+        # Enable mouse wheel scrolling
+        def _on_mousewheel(event):
+            settings_canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+        settings_canvas.bind_all("<MouseWheel>", _on_mousewheel)
+
+        settings_content = settings_scrollable_frame
 
         # Input folder
         self._create_folder_field(settings_content, "Input Folder",
@@ -753,6 +825,147 @@ class PhotoSelectorApp:
         separator3 = tk.Frame(settings_content, height=1, bg=self.colors['border'])
         separator3.pack(fill=tk.X, pady=15)
 
+        # Brightness threshold
+        brightness_label = ttk.Label(settings_content,
+                                    text=f"Brightness Threshold (separate dark/light photos)",
+                                    style='TLabel')
+        brightness_label.pack(anchor=tk.W, pady=(0, 8))
+
+        brightness_container = tk.Frame(settings_content, bg=self.colors['card'])
+        brightness_container.pack(fill=tk.X)
+
+        self.brightness_scale = tk.Scale(
+            brightness_container,
+            from_=50,
+            to=200,
+            resolution=5,
+            variable=self.brightness_threshold,
+            orient=tk.HORIZONTAL,
+            bg=self.colors['card'],
+            fg=self.colors['text'],
+            troughcolor=self.colors['input_bg'],
+            highlightthickness=0,
+            sliderrelief='raised',
+            sliderlength=20,
+            width=12,
+            activebackground=self.colors['accent'],
+            font=('SF Pro Text', 10),
+            length=400
+        )
+        self.brightness_scale.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        brightness_value_label = tk.Label(brightness_container,
+                                        textvariable=self.brightness_threshold,
+                                        font=('SF Pro Text', 14, 'bold'),
+                                        bg=self.colors['card'],
+                                        fg=self.colors['accent'],
+                                        width=4)
+        brightness_value_label.pack(side=tk.LEFT, padx=15)
+
+        # Help text for brightness threshold
+        brightness_help = ttk.Label(settings_content,
+                                   text="Photos below this value will use dark preset, above will use light preset",
+                                   style='Secondary.TLabel')
+        brightness_help.pack(anchor=tk.W, pady=(5, 0))
+
+        # Separator
+        separator3b = tk.Frame(settings_content, height=1, bg=self.colors['border'])
+        separator3b.pack(fill=tk.X, pady=15)
+
+        # Minimum brightness threshold (reject too dark images)
+        min_brightness_label = ttk.Label(settings_content,
+                                        text=f"Minimum Brightness (reject too dark/faded images)",
+                                        style='TLabel')
+        min_brightness_label.pack(anchor=tk.W, pady=(0, 8))
+
+        min_brightness_container = tk.Frame(settings_content, bg=self.colors['card'])
+        min_brightness_container.pack(fill=tk.X)
+
+        self.min_brightness_scale = tk.Scale(
+            min_brightness_container,
+            from_=0,
+            to=80,
+            resolution=5,
+            variable=self.min_brightness_threshold,
+            orient=tk.HORIZONTAL,
+            bg=self.colors['card'],
+            fg=self.colors['text'],
+            troughcolor=self.colors['input_bg'],
+            highlightthickness=0,
+            sliderrelief='raised',
+            sliderlength=20,
+            width=12,
+            activebackground=self.colors['accent'],
+            font=('SF Pro Text', 10),
+            length=400
+        )
+        self.min_brightness_scale.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        min_brightness_value_label = tk.Label(min_brightness_container,
+                                             textvariable=self.min_brightness_threshold,
+                                             font=('SF Pro Text', 14, 'bold'),
+                                             bg=self.colors['card'],
+                                             fg=self.colors['accent'],
+                                             width=4)
+        min_brightness_value_label.pack(side=tk.LEFT, padx=15)
+
+        # Help text for min brightness
+        min_brightness_help = ttk.Label(settings_content,
+                                       text="Photos below this value will be rejected (underexposed/faded)",
+                                       style='Secondary.TLabel')
+        min_brightness_help.pack(anchor=tk.W, pady=(5, 0))
+
+        # Separator
+        separator3c = tk.Frame(settings_content, height=1, bg=self.colors['border'])
+        separator3c.pack(fill=tk.X, pady=15)
+
+        # Maximum brightness threshold (reject burned out images)
+        max_brightness_label = ttk.Label(settings_content,
+                                        text=f"Maximum Brightness (reject burned out images)",
+                                        style='TLabel')
+        max_brightness_label.pack(anchor=tk.W, pady=(0, 8))
+
+        max_brightness_container = tk.Frame(settings_content, bg=self.colors['card'])
+        max_brightness_container.pack(fill=tk.X)
+
+        self.max_brightness_scale = tk.Scale(
+            max_brightness_container,
+            from_=180,
+            to=255,
+            resolution=5,
+            variable=self.max_brightness_threshold,
+            orient=tk.HORIZONTAL,
+            bg=self.colors['card'],
+            fg=self.colors['text'],
+            troughcolor=self.colors['input_bg'],
+            highlightthickness=0,
+            sliderrelief='raised',
+            sliderlength=20,
+            width=12,
+            activebackground=self.colors['accent'],
+            font=('SF Pro Text', 10),
+            length=400
+        )
+        self.max_brightness_scale.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        max_brightness_value_label = tk.Label(max_brightness_container,
+                                             textvariable=self.max_brightness_threshold,
+                                             font=('SF Pro Text', 14, 'bold'),
+                                             bg=self.colors['card'],
+                                             fg=self.colors['accent'],
+                                             width=4)
+        max_brightness_value_label.pack(side=tk.LEFT, padx=15)
+
+        # Help text for max brightness
+        max_brightness_help = ttk.Label(settings_content,
+                                       text="Photos above this value will be rejected (overexposed/burned out)",
+                                       style='Secondary.TLabel')
+        max_brightness_help.pack(anchor=tk.W, pady=(5, 0))
+
+        # Separator
+        separator3d = tk.Frame(settings_content, height=1, bg=self.colors['border'])
+        separator3d.pack(fill=tk.X, pady=15)
+
         # Checkboxes
         check_auto = ttk.Checkbutton(settings_content,
                                     text="Auto-straighten tilted photos",
@@ -764,40 +977,71 @@ class PhotoSelectorApp:
         separator4 = tk.Frame(settings_content, height=1, bg=self.colors['border'])
         separator4.pack(fill=tk.X, pady=15)
 
-        # XMP Preset and Watermark in one row
-        preset_watermark_container = tk.Frame(settings_content, bg=self.colors['card'])
-        preset_watermark_container.pack(fill=tk.X)
+        # XMP Presets for Dark and Light Photos
+        presets_container = tk.Frame(settings_content, bg=self.colors['card'])
+        presets_container.pack(fill=tk.X)
 
-        # XMP Preset (left side)
-        preset_frame = tk.Frame(preset_watermark_container, bg=self.colors['card'])
-        preset_frame.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 15))
+        # Dark Photos Preset (left side)
+        preset_dark_frame = tk.Frame(presets_container, bg=self.colors['card'])
+        preset_dark_frame.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 15))
 
-        preset_label = ttk.Label(preset_frame, text="XMP Preset", style='TLabel')
-        preset_label.pack(anchor=tk.W, pady=(0, 8))
+        preset_dark_label = ttk.Label(preset_dark_frame, text="XMP Preset (Dark Photos)", style='TLabel')
+        preset_dark_label.pack(anchor=tk.W, pady=(0, 8))
 
-        preset_info = ttk.Label(preset_frame,
-                               textvariable=self.preset_file,
+        preset_dark_info = ttk.Label(preset_dark_frame,
+                               textvariable=self.preset_file_dark,
                                style='Secondary.TLabel')
-        preset_info.pack(anchor=tk.W, pady=(0, 10))
+        preset_dark_info.pack(anchor=tk.W, pady=(0, 10))
 
-        preset_btn_container = tk.Frame(preset_frame, bg=self.colors['card'])
-        preset_btn_container.pack(fill=tk.X)
+        preset_dark_btn_container = tk.Frame(preset_dark_frame, bg=self.colors['card'])
+        preset_dark_btn_container.pack(fill=tk.X)
 
-        preset_custom_btn = ttk.Button(preset_btn_container,
+        preset_dark_custom_btn = ttk.Button(preset_dark_btn_container,
                                       text="Select Preset",
-                                      command=self.select_preset_file,
+                                      command=self.select_preset_file_dark,
                                       style='Secondary.TButton')
-        preset_custom_btn.pack(side=tk.LEFT, padx=(0, 10))
+        preset_dark_custom_btn.pack(side=tk.LEFT, padx=(0, 10))
 
-        preset_builtin_btn = ttk.Button(preset_btn_container,
+        preset_dark_builtin_btn = ttk.Button(preset_dark_btn_container,
                                        text="Use Built-in",
-                                       command=self.use_builtin_preset,
+                                       command=self.use_builtin_preset_dark,
                                        style='Secondary.TButton')
-        preset_builtin_btn.pack(side=tk.LEFT)
+        preset_dark_builtin_btn.pack(side=tk.LEFT)
 
-        # PDF Watermark (right side)
-        watermark_frame = tk.Frame(preset_watermark_container, bg=self.colors['card'])
-        watermark_frame.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        # Light Photos Preset (right side)
+        preset_light_frame = tk.Frame(presets_container, bg=self.colors['card'])
+        preset_light_frame.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        preset_light_label = ttk.Label(preset_light_frame, text="XMP Preset (Light Photos)", style='TLabel')
+        preset_light_label.pack(anchor=tk.W, pady=(0, 8))
+
+        preset_light_info = ttk.Label(preset_light_frame,
+                               textvariable=self.preset_file_light,
+                               style='Secondary.TLabel')
+        preset_light_info.pack(anchor=tk.W, pady=(0, 10))
+
+        preset_light_btn_container = tk.Frame(preset_light_frame, bg=self.colors['card'])
+        preset_light_btn_container.pack(fill=tk.X)
+
+        preset_light_custom_btn = ttk.Button(preset_light_btn_container,
+                                      text="Select Preset",
+                                      command=self.select_preset_file_light,
+                                      style='Secondary.TButton')
+        preset_light_custom_btn.pack(side=tk.LEFT, padx=(0, 10))
+
+        preset_light_builtin_btn = ttk.Button(preset_light_btn_container,
+                                       text="Use Built-in",
+                                       command=self.use_builtin_preset_light,
+                                       style='Secondary.TButton')
+        preset_light_builtin_btn.pack(side=tk.LEFT)
+
+        # Separator
+        separator5 = tk.Frame(settings_content, height=1, bg=self.colors['border'])
+        separator5.pack(fill=tk.X, pady=15)
+
+        # PDF Watermark
+        watermark_frame = tk.Frame(settings_content, bg=self.colors['card'])
+        watermark_frame.pack(fill=tk.X)
 
         watermark_label = ttk.Label(watermark_frame, text="PDF Watermark", style='TLabel')
         watermark_label.pack(anchor=tk.W, pady=(0, 8))
@@ -940,8 +1184,15 @@ class PhotoSelectorApp:
 
     def _load_default_watermark(self):
         """Auto-load watermark.png if it exists in the script directory"""
-        script_dir = Path(__file__).parent
-        default_watermark = script_dir / "watermark.png"
+        # Check if running as bundled app (PyInstaller)
+        if getattr(sys, 'frozen', False):
+            # Running in PyInstaller bundle
+            bundle_dir = sys._MEIPASS
+            default_watermark = Path(bundle_dir) / "watermark.png"
+        else:
+            # Running in normal Python
+            script_dir = Path(__file__).parent
+            default_watermark = script_dir / "watermark.png"
 
         if default_watermark.exists():
             try:
@@ -1019,6 +1270,66 @@ class PhotoSelectorApp:
         self.custom_xmp_content = None
         self.preset_file.set("(Using built-in preset)")
         self.log_message("Using built-in XMP preset")
+
+    def select_preset_file_dark(self):
+        file = filedialog.askopenfilename(
+            title="Select XMP Preset File for Dark Photos",
+            filetypes=[("XMP Files", "*.xmp"), ("All Files", "*.*")]
+        )
+        if file:
+            try:
+                with open(file, 'r', encoding='utf-8') as f:
+                    self.custom_xmp_content_dark = f.read()
+
+                # Validate that it's a proper XMP file
+                if '<x:xmpmeta' not in self.custom_xmp_content_dark or 'crs:' not in self.custom_xmp_content_dark:
+                    messagebox.showerror("Invalid XMP",
+                                       "The selected file does not appear to be a valid Camera Raw XMP preset.")
+                    self.custom_xmp_content_dark = None
+                    return
+
+                filename = Path(file).name
+                self.preset_file_dark.set(filename)
+                self.log_message(f"Loaded custom preset for dark photos: {filename}")
+
+            except Exception as e:
+                messagebox.showerror("Error Loading Preset", f"Could not load preset file:\n{e}")
+                self.custom_xmp_content_dark = None
+
+    def use_builtin_preset_dark(self):
+        self.custom_xmp_content_dark = None
+        self.preset_file_dark.set("(Using built-in preset)")
+        self.log_message("Using built-in XMP preset for dark photos")
+
+    def select_preset_file_light(self):
+        file = filedialog.askopenfilename(
+            title="Select XMP Preset File for Light Photos",
+            filetypes=[("XMP Files", "*.xmp"), ("All Files", "*.*")]
+        )
+        if file:
+            try:
+                with open(file, 'r', encoding='utf-8') as f:
+                    self.custom_xmp_content_light = f.read()
+
+                # Validate that it's a proper XMP file
+                if '<x:xmpmeta' not in self.custom_xmp_content_light or 'crs:' not in self.custom_xmp_content_light:
+                    messagebox.showerror("Invalid XMP",
+                                       "The selected file does not appear to be a valid Camera Raw XMP preset.")
+                    self.custom_xmp_content_light = None
+                    return
+
+                filename = Path(file).name
+                self.preset_file_light.set(filename)
+                self.log_message(f"Loaded custom preset for light photos: {filename}")
+
+            except Exception as e:
+                messagebox.showerror("Error Loading Preset", f"Could not load preset file:\n{e}")
+                self.custom_xmp_content_light = None
+
+    def use_builtin_preset_light(self):
+        self.custom_xmp_content_light = None
+        self.preset_file_light.set("(Using built-in preset)")
+        self.log_message("Using built-in XMP preset for light photos")
 
     def select_watermark_file(self):
         file = filedialog.askopenfilename(
@@ -1113,19 +1424,21 @@ class PhotoSelectorApp:
         threshold = self.sharpness_threshold.get()
         detect_tilt = self.auto_straighten.get()
         include_vertical = True  # Always include vertical photos
+        max_brightness = self.max_brightness_threshold.get()
+        min_brightness = self.min_brightness_threshold.get()
 
         # Log start of analysis with settings to activity log
         self.root.after(0, self.log_to_activity,
                        f"Starting photo analysis...", 'info')
         self.root.after(0, self.log_to_activity,
-                       f"Settings: Sharpness threshold={threshold}, Auto-straighten={'ON' if detect_tilt else 'OFF'}", 'secondary')
+                       f"Settings: Sharpness={threshold}, Brightness range={min_brightness}-{max_brightness}, Auto-straighten={'ON' if detect_tilt else 'OFF'}", 'secondary')
 
         for i, file_path in enumerate(arw_files, 1):
             # Update status and progress
             self.root.after(0, self.update_status, f"Analyzing {i}/{len(arw_files)}: {file_path.name}")
             self.root.after(0, lambda val=i: self.progress.config(value=val))
 
-            result = analyze_photo(str(file_path), threshold, detect_tilt, include_vertical)
+            result = analyze_photo(str(file_path), threshold, detect_tilt, include_vertical, max_brightness, min_brightness)
             result['path'] = str(file_path)
             result['filename'] = file_path.name
             self.photos.append(result)
@@ -1136,6 +1449,12 @@ class PhotoSelectorApp:
 
             # Add sharpness value
             status_parts.append(f"Sharp: {result['sharpness']:.1f}")
+
+            # Add brightness value
+            brightness = result.get('brightness', 128.0)
+            brightness_threshold = self.brightness_threshold.get()
+            brightness_category = "dark" if brightness < brightness_threshold else "light"
+            status_parts.append(f"Bright: {brightness:.1f} ({brightness_category})")
 
             # Add face count if faces detected
             if result.get('face_count', 0) > 0:
@@ -1152,6 +1471,10 @@ class PhotoSelectorApp:
                     reasons.append("no faces")
                 if not result['is_sharp']:
                     reasons.append(f"low sharpness (<{threshold})")
+                if result.get('is_too_dark', False):
+                    reasons.append(f"too dark (<{min_brightness})")
+                if result.get('is_burned_out', False):
+                    reasons.append(f"burned out (>{max_brightness})")
                 if not include_vertical and not result['is_horizontal']:
                     reasons.append("vertical")
                 if reasons:
@@ -1162,6 +1485,12 @@ class PhotoSelectorApp:
             self.root.after(0, self.log_message, " | ".join(status_parts), tag)
         
         selected_count = sum(1 for p in self.photos if p['selected'])
+
+        # Calculate dark vs light photo statistics
+        brightness_threshold = self.brightness_threshold.get()
+        selected_photos = [p for p in self.photos if p['selected']]
+        dark_count = sum(1 for p in selected_photos if p.get('brightness', 128.0) < brightness_threshold)
+        light_count = len(selected_photos) - dark_count
 
         # Completion summary - add to results
         self.root.after(0, self.log_message,
@@ -1174,6 +1503,10 @@ class PhotoSelectorApp:
                        f"Photos analyzed: {len(self.photos)}", 'info')
         self.root.after(0, self.log_message,
                        f"Photos selected: {selected_count}", 'success')
+        self.root.after(0, self.log_message,
+                       f"  - Dark photos (< {brightness_threshold}): {dark_count}", 'info')
+        self.root.after(0, self.log_message,
+                       f"  - Light photos (>= {brightness_threshold}): {light_count}", 'info')
         self.root.after(0, self.log_message,
                        f"Photos rejected: {len(self.photos) - selected_count}", 'secondary')
         self.root.after(0, self.log_message,
@@ -1257,24 +1590,41 @@ class PhotoSelectorApp:
 
                 # Generate and save XMP sidecar file with preset (including rotation if detected)
                 tilt_angle = photo.get('tilt_angle', 0.0)
+                brightness = photo.get('brightness', 128.0)
+                brightness_threshold = self.brightness_threshold.get()
                 xmp_path = new_raw_path.replace(original_ext, '.xmp')
 
-                # Use custom XMP if loaded, otherwise use built-in preset
-                if self.custom_xmp_content:
-                    xmp_content = generate_xmp_with_rotation(tilt_angle, base_xmp=self.custom_xmp_content)
+                # Determine if photo is dark or light based on brightness threshold
+                is_dark = brightness < brightness_threshold
+
+                # Choose appropriate XMP preset based on brightness
+                if is_dark:
+                    # Use dark preset
+                    if self.custom_xmp_content_dark:
+                        xmp_content = generate_xmp_with_rotation(tilt_angle, base_xmp=self.custom_xmp_content_dark)
+                        preset_type = "dark (custom)"
+                    else:
+                        xmp_content = generate_xmp_with_rotation(tilt_angle)
+                        preset_type = "dark (built-in)"
                 else:
-                    xmp_content = generate_xmp_with_rotation(tilt_angle)
+                    # Use light preset
+                    if self.custom_xmp_content_light:
+                        xmp_content = generate_xmp_with_rotation(tilt_angle, base_xmp=self.custom_xmp_content_light)
+                        preset_type = "light (custom)"
+                    else:
+                        xmp_content = generate_xmp_with_rotation(tilt_angle)
+                        preset_type = "light (built-in)"
 
                 with open(xmp_path, 'w', encoding='utf-8') as xmp_file:
                     xmp_file.write(xmp_content)
 
-                # Log XMP creation with tilt info if detected
+                # Log XMP creation with brightness and tilt info
                 if abs(tilt_angle) > 0.1:
                     self.root.after(0, self.log_to_activity,
-                                  f"  → XMP created with {abs(tilt_angle):.2f}° rotation", 'success')
+                                  f"  → XMP {preset_type} applied, brightness={brightness:.1f}, rotation={abs(tilt_angle):.2f}°", 'success')
                 else:
                     self.root.after(0, self.log_to_activity,
-                                  f"  → XMP preset applied", 'secondary')
+                                  f"  → XMP {preset_type} applied, brightness={brightness:.1f}", 'secondary')
 
             except Exception as e:
                 self.root.after(0, self.log_to_activity,
